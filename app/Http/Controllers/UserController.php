@@ -22,8 +22,8 @@ use Illuminate\Support\Facades\Password;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Support\Facades\Validator;
 use GuzzleHttp\Exception\RequestException;
-use App\Models\Parametrizacion\ParametroCorreo;
-use App\Models\Parametrizacion\ParametroConstante;
+use App\Support\Configuracion\Configuracion;
+use App\Support\Academias\GestorAcademias;
 
 class UserController extends Controller
 {
@@ -87,13 +87,20 @@ class UserController extends Controller
         }
 
         $http = new Client;
-        $hostname = env("APP_URL");
+        $hostname = config('app.url');
 
         // var_dump($hostname);
 
         try{
             $user = User::where('email',$request->username)->first();
             $usuario = Usuario::where('identificacion_usuario', $request->username)->first();
+
+            if (!$usuario) {
+                return response([
+                    "data" => null,
+                    "messages" => ["Usuario o clave incorrectos."]
+                ],Response::HTTP_UNAUTHORIZED);
+            }
 
             // Validar que el usuario esté activo
             if (!$usuario->estado) {
@@ -106,9 +113,11 @@ class UserController extends Controller
             if(isset($user)){
 
                 $response = $http->post($hostname.'/oauth/token', [
+                    // La llamada interna debe resolver la misma academia (su BD tiene los tokens).
+                    'headers' => ['X-Academia' => GestorAcademias::actual()?->codigo],
                     'form_params' => [
-                        'client_id' => env("PASSWORD_CLIENT_ID"),
-                        'client_secret' => env("PASSWORD_CLIENT_SECRET"),
+                        'client_id' => config('passport.password_client.id'),
+                        'client_secret' => config('passport.password_client.secret'),
                         'grant_type' => 'password',
                         'username' => $request->username,
                         'password' => $request->password
@@ -289,25 +298,32 @@ class UserController extends Controller
             return response(["mensajes" => ['Problema con el servidor de correos']], Response::HTTP_BAD_REQUEST);
         }
 
-        $parametros = ParametroConstante::cargarParametros();
+        // Plantilla RECUPERAR_CLAVE de la academia (Configuración → Plantillas de correo).
+        $academia = GestorAcademias::actual();
+        $base = $academia ? $academia->url() : rtrim((string) config('app.front_url'), '/');
+        $variables = [
+            'nombre' => $usuario->nombre,
+            'enlace' => $base . '/reset-password/' . $token,
+            'academia' => $academia?->nombre ?? config('app.name'),
+        ];
+        $plantilla = Configuracion::plantilla('RECUPERAR_CLAVE', $variables)
+            ?? Configuracion::renderizar(
+                Configuracion::porDefecto('RECUPERAR_CLAVE')['asunto'],
+                Configuracion::porDefecto('RECUPERAR_CLAVE')['texto'],
+                $variables
+            );
 
-        if (!isset($parametros['ID_CORREO_CAMBIO_CLAVE'])) {
-            return response(["mensajes" => ['El parámetro ID_CORREO_CAMBIO_CLAVE no existe']], Response::HTTP_BAD_REQUEST);
+        try {
+            Mail::send('emails.reset-password', ['texto' => $plantilla['html']], function (Message $message) use ($usuario, $plantilla, $academia) {
+                $message->subject($plantilla['asunto']);
+                $message->to($usuario->correo_electronico);
+                if ($academia) {
+                    $message->from(config('mail.from.address'), $academia->nombre);
+                }
+            });
+        } catch (\Exception $e) {
+            return response(["mensajes" => ['No se pudo enviar el correo. Intenta más tarde.']], Response::HTTP_BAD_REQUEST);
         }
-
-        $parametroCorreo = ParametroCorreo::find($parametros['ID_CORREO_CAMBIO_CLAVE']);
-
-        if (!isset($parametroCorreo)) {
-            return response(["mensajes" => ['El parámetro ID_CORREO_CAMBIO_CLAVE es inválido']], Response::HTTP_BAD_REQUEST);
-        }
-
-        $parametroCorreo->texto = str_replace('&amp;1', $usuario->nombre, $parametroCorreo->texto);
-        $parametroCorreo->texto = str_replace('&amp;2', env('APP_FRONT_URL') . '/reset-password/' . $token, $parametroCorreo->texto);
-
-        Mail::send('emails.reset-password', ['texto' => $parametroCorreo->texto], function (Message $message) use ($user, $usuario, $parametroCorreo) {
-            $message->subject($parametroCorreo->asunto);
-            $message->to($usuario->correo_electronico);
-        });
 
         return response(["mensajes" => ["El email ha sido enviado"]], Response::HTTP_OK);
     }

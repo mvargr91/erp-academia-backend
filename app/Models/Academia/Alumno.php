@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\Seguridad\AuditoriaTabla;
+use App\Services\Academia\NotificadorAcademia;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class Alumno extends Model
@@ -19,6 +20,7 @@ class Alumno extends Model
 
     protected $fillable = [
         'usuario_id',
+        'sede_id',
         'nombres',
         'apellidos',
         'documento',
@@ -50,6 +52,10 @@ class Alumno extends Model
             ->select(
                 'id',
                 'usuario_id',
+                'sede_id',
+                DB::raw('(SELECT nombre FROM sedes WHERE sedes.id = alumnos.sede_id) as sede_nombre'),
+                // Lo que debe hoy: saldos de sus cursos y de sus paquetes de clases.
+                DB::raw("(SELECT COALESCE(SUM(curso_alumno.saldo), 0) FROM curso_alumno WHERE curso_alumno.alumno_id = alumnos.id AND curso_alumno.estado = 1 AND curso_alumno.saldo > 0) + (SELECT COALESCE(SUM(paquetes_alumno.saldo), 0) FROM paquetes_alumno WHERE paquetes_alumno.alumno_id = alumnos.id AND paquetes_alumno.estado = 'activo' AND paquetes_alumno.saldo > 0) as saldo_pendiente"),
                 'nombres',
                 'apellidos',
                 'documento',
@@ -67,6 +73,18 @@ class Alumno extends Model
                 'created_at as fecha_creacion',
                 'updated_at as fecha_modificacion',
             );
+
+        // Con una sede elegida: los alumnos de esa sede o matriculados en alguno de sus cursos.
+        if ($sedeId = Sede::actual()) {
+            $query->where(function ($q) use ($sedeId) {
+                $q->where('sede_id', $sedeId)
+                    ->orWhereExists(fn ($sub) => $sub->from('curso_alumno')
+                        ->join('cursos', 'cursos.id', '=', 'curso_alumno.curso_id')
+                        ->whereColumn('curso_alumno.alumno_id', 'alumnos.id')
+                        ->where('curso_alumno.estado', 1)
+                        ->where('cursos.sede_id', $sedeId));
+            });
+        }
 
         if (isset($dto['nombre'])) {
             $query->where(function ($q) use ($dto) {
@@ -111,6 +129,7 @@ class Alumno extends Model
         return [
             'id' => $alumno->id,
             'usuario_id' => $alumno->usuario_id,
+            'sede_id' => $alumno->sede_id,
             'nombres' => $alumno->nombres,
             'apellidos' => $alumno->apellidos,
             'documento' => $alumno->documento,
@@ -127,6 +146,98 @@ class Alumno extends Model
             'usuario_modificacion_nombre' => $alumno->usuario_modificacion_nombre,
             'fecha_creacion' => (new Carbon($alumno->created_at))->format('Y-m-d H:i:s'),
             'fecha_modificacion' => (new Carbon($alumno->updated_at))->format('Y-m-d H:i:s'),
+        ];
+    }
+
+    /**
+     * Estado de cuenta del alumno: lo que debe (cursos y paquetes), lo que ha pagado,
+     * los ciclos que se le han cobrado y su historial de pagos.
+     */
+    public static function estadoCuenta($id): array
+    {
+        $alumno = DB::table('alumnos')->where('id', $id)->first();
+
+        $cursos = DB::table('curso_alumno as ca')
+            ->join('cursos as c', 'c.id', '=', 'ca.curso_id')
+            ->leftJoin('ritmos as r', 'r.id', '=', 'c.ritmo_id')
+            ->leftJoin('planes as p', 'p.id', '=', 'c.plan_id')
+            ->leftJoin('sedes as s', 's.id', '=', 'c.sede_id')
+            ->where('ca.alumno_id', $id)
+            ->where('ca.estado', 1)
+            ->orderBy('ca.fecha_matricula')
+            ->select(
+                'ca.id as curso_alumno_id', 'ca.curso_id', 'ca.modalidad', 'ca.saldo', 'ca.fecha_matricula', 'ca.ultima_fecha_pago',
+                DB::raw("CONCAT(COALESCE(c.nombre, r.nombre), ' - ', DATE_FORMAT(c.hora, '%H:%i')) as curso"),
+                'p.nombre as plan', 's.nombre as sede',
+                DB::raw('(SELECT COALESCE(SUM(pg.monto), 0) FROM pagos pg WHERE pg.alumno_id = ca.alumno_id AND pg.curso_id = ca.curso_id AND pg.paquete_id IS NULL) as pagado'),
+            )
+            ->get()
+            ->map(fn ($c) => array_merge((array) $c, [
+                // Cobrado hasta hoy = lo pagado más lo que aún debe.
+                'saldo' => (float) $c->saldo, 'pagado' => (float) $c->pagado, 'cobrado' => (float) $c->pagado + (float) $c->saldo,
+            ]));
+
+        $paquetes = DB::table('paquetes_alumno as pa')
+            ->leftJoin('planes as p', 'p.id', '=', 'pa.plan_id')
+            ->where('pa.alumno_id', $id)
+            ->where('pa.estado', 'activo')
+            ->orderBy('pa.fecha_compra', 'desc')
+            ->select('pa.id', 'pa.fecha_compra', 'pa.fecha_vencimiento', 'pa.clases_total', 'pa.valor', 'pa.saldo',
+                DB::raw("COALESCE(p.nombre, 'Paquete') as plan"))
+            ->get()
+            ->map(fn ($p) => array_merge((array) $p, [
+                'valor' => (float) $p->valor, 'saldo' => (float) $p->saldo, 'pagado' => (float) $p->valor - (float) $p->saldo,
+            ]));
+
+        $cargos = DB::table('cargos_mensuales as cm')
+            ->join('curso_alumno as ca', 'ca.id', '=', 'cm.curso_alumno_id')
+            ->join('cursos as c', 'c.id', '=', 'ca.curso_id')
+            ->leftJoin('ritmos as r', 'r.id', '=', 'c.ritmo_id')
+            ->where('ca.alumno_id', $id)
+            ->orderBy('cm.periodo', 'desc')
+            ->limit(100)
+            ->select('cm.id', 'cm.periodo', 'cm.valor', 'cm.regla', DB::raw('COALESCE(c.nombre, r.nombre) as curso'))
+            ->get();
+
+        $pagos = DB::table('pagos as pg')
+            ->leftJoin('cursos as c', 'c.id', '=', 'pg.curso_id')
+            ->leftJoin('ritmos as r', 'r.id', '=', 'c.ritmo_id')
+            ->leftJoin('paquetes_alumno as pa', 'pa.id', '=', 'pg.paquete_id')
+            ->leftJoin('planes as pp', 'pp.id', '=', 'pa.plan_id')
+            ->leftJoin('sedes as s', 's.id', '=', 'pg.sede_id')
+            ->where('pg.alumno_id', $id)
+            ->orderBy('pg.fecha_pago', 'desc')
+            ->orderBy('pg.id', 'desc')
+            ->select('pg.id', 'pg.fecha_pago', 'pg.monto', 'pg.metodo_pago', 'pg.referencia', 's.nombre as sede',
+                DB::raw("CASE WHEN pg.paquete_id IS NOT NULL THEN CONCAT('Paquete ', COALESCE(pp.nombre, CONCAT('#', pg.paquete_id))) "
+                    . "ELSE COALESCE(c.nombre, r.nombre, 'Pago') END as concepto"))
+            ->get();
+
+        $debeCursos = (float) $cursos->where('saldo', '>', 0)->sum('saldo');
+        $debePaquetes = (float) $paquetes->where('saldo', '>', 0)->sum('saldo');
+
+        return [
+            'alumno' => [
+                'id' => $alumno->id,
+                'nombre' => trim("{$alumno->nombres} {$alumno->apellidos}"),
+                'documento' => $alumno->documento,
+                'telefono' => $alumno->telefono,
+                'correo' => $alumno->correo,
+                'estado' => $alumno->estado,
+            ],
+            'resumen' => [
+                'saldo_pendiente' => $debeCursos + $debePaquetes,
+                'saldo_cursos' => $debeCursos,
+                'saldo_paquetes' => $debePaquetes,
+                // Pagó de más en algún curso (saldo negativo).
+                'saldo_a_favor' => (float) abs($cursos->where('saldo', '<', 0)->sum('saldo')),
+                'total_pagado' => (float) $pagos->sum('monto'),
+                'ultimo_pago' => $pagos->first()?->fecha_pago,
+            ],
+            'cursos' => $cursos->values(),
+            'paquetes' => $paquetes->values(),
+            'cargos' => $cargos,
+            'pagos' => $pagos,
         ];
     }
 
@@ -148,6 +259,11 @@ class Alumno extends Model
         $alumno->fill($dto);
         if (!$alumno->save()) {
             throw new Exception('Ocurrió un error al intentar guardar el alumno.');
+        }
+
+        // Bienvenida a la academia solo al crear el alumno.
+        if (!isset($dto['id'])) {
+            NotificadorAcademia::bienvenidaAlumno($alumno->id);
         }
 
         AuditoriaTabla::crear([

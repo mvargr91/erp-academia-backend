@@ -50,10 +50,12 @@ class PlanController extends Controller
             $datos = $request->all();
             $validator = Validator::make($datos, [
                 'nombre' => 'string|required|max:100',
+                'sede_id' => 'integer|nullable|exists:sedes,id',
                 'descripcion' => 'string|nullable',
                 'valor' => 'numeric|required|min:0',
                 'periodicidad' => 'string|required|in:semanal,mensual,paquete',
                 'num_clases' => 'integer|nullable|min:1',
+                'vigencia_dias' => 'integer|nullable|min:1',
                 'estado' => 'boolean|required',
             ]);
 
@@ -112,10 +114,12 @@ class PlanController extends Controller
             $validator = Validator::make($datos, [
                 'id' => 'integer|required|exists:planes,id',
                 'nombre' => 'string|required|max:100',
+                'sede_id' => 'integer|nullable|exists:sedes,id',
                 'descripcion' => 'string|nullable',
                 'valor' => 'numeric|required|min:0',
                 'periodicidad' => 'string|required|in:semanal,mensual,paquete',
                 'num_clases' => 'integer|nullable|min:1',
+                'vigencia_dias' => 'integer|nullable|min:1',
                 'estado' => 'boolean|required',
             ]);
 

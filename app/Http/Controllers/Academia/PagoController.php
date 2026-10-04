@@ -16,8 +16,10 @@ class PagoController extends Controller
     {
         return [
             'alumno_id' => 'integer|required|exists:alumnos,id',
+            'sede_id' => 'integer|nullable|exists:sedes,id',
             'curso_id' => 'integer|nullable|exists:cursos,id',
             'plan_id' => 'integer|nullable|exists:planes,id',
+            'paquete_id' => 'integer|nullable|exists:paquetes_alumno,id',
             'monto' => 'numeric|required|min:0',
             'fecha_pago' => 'date|required',
             'metodo_pago' => 'string|required|in:efectivo,transferencia,tarjeta,otro',

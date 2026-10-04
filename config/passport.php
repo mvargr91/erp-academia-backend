@@ -72,4 +72,10 @@ return [
         'secret' => env('PASSPORT_PERSONAL_ACCESS_CLIENT_SECRET'),
     ],
 
+    // Cliente "password grant" con el que el login pide el token a /oauth/token.
+    'password_client' => [
+        'id' => env('PASSWORD_CLIENT_ID'),
+        'secret' => env('PASSWORD_CLIENT_SECRET'),
+    ],
+
 ];

@@ -5,7 +5,7 @@ namespace Database\Seeders;
 use Carbon\Carbon;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
-use Spatie\Permission\PermissionRegistrar;
+use App\Support\Academias\GestorAcademias;
 
 /**
  * Registra en el menú los módulos, opciones y permisos de la Academia
@@ -30,13 +30,27 @@ class AcademiaMenuSeeder extends Seeder
             ['Profesores', '/profesores', 'person', 'Profesor'],
             ['Cursos', '/cursos', 'event', 'Curso'],
             ['Asistencia', '/asistencias', 'fact_check', 'Asistencia'],
+            ['Clases personalizadas', '/clases-privadas', 'person_pin', 'ClasePrivada'],
+            ['Paquetes de clases', '/paquetes', 'card_membership', 'Paquete'],
+            ['Envíos de correo', '/envios-correo', 'campaign', 'EnvioCorreo'],
             ['Pagos', '/pagos', 'payments', 'Pago'],
         ]],
         'Configuración Academia' => ['settings', 6, [
+            ['Sedes', '/sedes', 'store', 'Sede'],
             ['Ritmos', '/ritmos', 'music_note', 'Ritmo'],
             ['Planes', '/planes', 'sell', 'Plan'],
+            ['Cierres de la academia', '/cierres', 'event_busy', 'Cierre'],
+            ['Parámetros', '/parametros', 'tune', 'ParametroSistema'],
+            ['Plantillas de correo', '/plantillas-correo', 'mail', 'PlantillaCorreo'],
+            ['Apariencia', '/apariencia', 'palette', 'Apariencia'],
         ]],
     ];
+
+    /** Menú a registrar; las subclases lo reemplazan para sembrar otros módulos. */
+    protected function menu(): array
+    {
+        return self::MENU;
+    }
 
     public function run()
     {
@@ -50,7 +64,7 @@ class AcademiaMenuSeeder extends Seeder
             ];
             $aplicacionId = DB::table('aplicaciones')->orderBy('id')->value('id');
 
-            foreach (self::MENU as $nombreModulo => [$iconoModulo, $posicionModulo, $opciones]) {
+            foreach ($this->menu() as $nombreModulo => [$iconoModulo, $posicionModulo, $opciones]) {
                 DB::table('modulos')->updateOrInsert(
                     ['nombre' => $nombreModulo, 'aplicacion_id' => $aplicacionId],
                     array_merge($auditoria, [
@@ -110,6 +124,6 @@ class AcademiaMenuSeeder extends Seeder
             }
         });
 
-        app()[PermissionRegistrar::class]->forgetCachedPermissions();
+        GestorAcademias::olvidarCachePermisos();
     }
 }

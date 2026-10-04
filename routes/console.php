@@ -10,9 +10,15 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-Artisan::command('extractos:enviar', function () {
-    $this->call(\App\Console\Commands\EnviarExtractosInversionistas::class);
-})->describe('Genera y envía extractos mensuales a los inversionistas');
+// Academias: mensualidades, recordatorios de pago y avisos de mora (todas las academias activas).
+Schedule::command('notificaciones:enviar')->dailyAt('08:00')->withoutOverlapping();
 
-// Programación del comando cada 1ro del mes a la 1:00 AM
-Schedule::command('extractos:enviar')->monthlyOn(1, '01:00');
+// Festivos de Colombia del año siguiente (y repaso del actual), cada 1 de diciembre.
+Schedule::command('festivos:generar')->yearlyOn(12, 1, '06:00');
+
+// Cobro del ERP a las academias: cuentas de cobro, avisos y suspensión por mora.
+Schedule::command('facturacion:academias')->dailyAt('07:00')->withoutOverlapping();
+
+// Procesa la cola (correos de bienvenida) sin necesidad de un worker permanente:
+// basta con el cron de schedule:run cada minuto.
+Schedule::command('queue:work --stop-when-empty --tries=3')->everyMinute()->withoutOverlapping();

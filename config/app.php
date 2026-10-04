@@ -54,6 +54,9 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
+    // URL del frontend cuando no hay academia activa (enlaces de los correos).
+    'front_url' => env('APP_FRONT_URL'),
+
     /*
     |--------------------------------------------------------------------------
     | Application Timezone

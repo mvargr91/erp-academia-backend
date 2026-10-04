@@ -8,14 +8,18 @@ use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
 use App\Models\Academia\Curso;
+use App\Models\Academia\Sede;
 use Illuminate\Support\Facades\Validator;
 
 class CursoController extends Controller
 {
+    private const MENSAJES = ['sede_id.required' => 'Elige la sede del curso.'];
+
     private function reglas($id = null)
     {
         return [
             'nombre' => 'string|nullable|max:120',
+            'sede_id' => 'bail|required|integer|exists:sedes,id',
             'ritmo_id' => 'integer|required|exists:ritmos,id',
             'profesor_id' => 'integer|nullable|exists:profesores,id',
             'plan_id' => 'integer|nullable|exists:planes,id',
@@ -60,7 +64,8 @@ class CursoController extends Controller
         DB::beginTransaction();
         try {
             $datos = $request->all();
-            $validator = Validator::make($datos, $this->reglas());
+            $datos['sede_id'] = Sede::resolver($datos['sede_id'] ?? null);
+            $validator = Validator::make($datos, $this->reglas(), self::MENSAJES);
             if ($validator->fails()) {
                 return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
             }
@@ -98,10 +103,11 @@ class CursoController extends Controller
         try {
             $datos = $request->all();
             $datos['id'] = $id;
+            $datos['sede_id'] = Sede::resolver($datos['sede_id'] ?? null);
             $validator = Validator::make($datos, array_merge(
                 ['id' => 'integer|required|exists:cursos,id'],
                 $this->reglas($id)
-            ));
+            ), self::MENSAJES);
             if ($validator->fails()) {
                 return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
             }

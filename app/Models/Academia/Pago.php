@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\Seguridad\AuditoriaTabla;
+use App\Services\Academia\NotificadorAcademia;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class Pago extends Model
@@ -19,8 +20,10 @@ class Pago extends Model
 
     protected $fillable = [
         'alumno_id',
+        'sede_id',
         'curso_id',
         'plan_id',
+        'paquete_id',
         'monto',
         'fecha_pago',
         'metodo_pago',
@@ -39,8 +42,11 @@ class Pago extends Model
             ->leftJoin('cursos', 'cursos.id', '=', 'pagos.curso_id')
             ->leftJoin('ritmos', 'ritmos.id', '=', 'cursos.ritmo_id')
             ->leftJoin('planes', 'planes.id', '=', 'pagos.plan_id')
+            ->leftJoin('sedes', 'sedes.id', '=', 'pagos.sede_id')
             ->select(
                 'pagos.id',
+                'pagos.sede_id',
+                'sedes.nombre as sede_nombre',
                 'pagos.alumno_id',
                 DB::raw("CONCAT(alumnos.nombres,' ',alumnos.apellidos) as alumno_nombre"),
                 'pagos.curso_id',
@@ -59,6 +65,8 @@ class Pago extends Model
                 'pagos.created_at as fecha_creacion',
                 'pagos.updated_at as fecha_modificacion',
             );
+
+        Sede::filtrar($query, 'pagos.sede_id');
 
         if (isset($dto['nombre'])) {
             $query->where(function ($q) use ($dto) {
@@ -83,6 +91,9 @@ class Pago extends Model
             foreach ($dto['ordenar_por'] as $attribute => $value) {
                 if ($attribute == 'alumno_nombre') {
                     $query->orderBy('alumnos.nombres', $value);
+                }
+                if ($attribute == 'sede_nombre') {
+                    $query->orderBy('sedes.nombre', $value);
                 }
                 if ($attribute == 'curso_nombre') {
                     $query->orderBy('ritmos.nombre', $value);
@@ -121,8 +132,10 @@ class Pago extends Model
         return [
             'id' => $pago->id,
             'alumno_id' => $pago->alumno_id,
+            'sede_id' => $pago->sede_id,
             'curso_id' => $pago->curso_id,
             'plan_id' => $pago->plan_id,
+            'paquete_id' => $pago->paquete_id,
             'monto' => $pago->monto,
             'fecha_pago' => $pago->fecha_pago,
             'metodo_pago' => $pago->metodo_pago,
@@ -154,16 +167,26 @@ class Pago extends Model
 
         // Al modificar, primero revierte el efecto del monto anterior sobre el saldo.
         if (isset($dto['id'])) {
-            Pago::ajustarSaldo($pago->curso_id, $pago->alumno_id, (float) $pago->monto);
+            Pago::ajustarSaldo($pago->curso_id, $pago->alumno_id, (float) $pago->monto, null, $pago->paquete_id);
         }
 
         $pago->fill($dto);
+        // Sede donde se recibió el pago: la indicada o, si no viene, la del curso o la del selector.
+        if (!$pago->sede_id) {
+            $pago->sede_id = ($pago->curso_id ? DB::table('cursos')->where('id', $pago->curso_id)->value('sede_id') : null)
+                ?? Sede::porDefecto();
+        }
         if (!$pago->save()) {
             throw new Exception('Ocurrió un error al intentar guardar el pago.');
         }
 
         // Descuenta el nuevo monto del saldo de la matrícula y marca la fecha de pago.
-        Pago::ajustarSaldo($pago->curso_id, $pago->alumno_id, -1 * (float) $pago->monto, $pago->fecha_pago);
+        Pago::ajustarSaldo($pago->curso_id, $pago->alumno_id, -1 * (float) $pago->monto, $pago->fecha_pago, $pago->paquete_id);
+
+        // Confirmación al alumno solo para pagos nuevos.
+        if (!isset($dto['id'])) {
+            NotificadorAcademia::confirmacionPago($pago->id);
+        }
 
         AuditoriaTabla::crear([
             'id_recurso' => $pago->id,
@@ -181,8 +204,16 @@ class Pago extends Model
      * Suma $delta al saldo de la matrícula del alumno en el curso.
      * $delta negativo = pago (baja el saldo); positivo = reverso.
      */
-    private static function ajustarSaldo($cursoId, $alumnoId, $delta, $fechaPago = null)
+    private static function ajustarSaldo($cursoId, $alumnoId, $delta, $fechaPago = null, $paqueteId = null)
     {
+        // Pago de un paquete de clases: abona al saldo del paquete.
+        if ($paqueteId) {
+            DB::table('paquetes_alumno')->where('id', $paqueteId)->update([
+                'saldo' => DB::raw('saldo + ' . (float) $delta),
+                'updated_at' => Carbon::now(),
+            ]);
+            return;
+        }
         if (!$cursoId || !$alumnoId) {
             return;
         }
@@ -207,7 +238,7 @@ class Pago extends Model
         $pago = Pago::find($id);
 
         // Revierte el saldo (devuelve el monto pagado).
-        Pago::ajustarSaldo($pago->curso_id, $pago->alumno_id, (float) $pago->monto);
+        Pago::ajustarSaldo($pago->curso_id, $pago->alumno_id, (float) $pago->monto, null, $pago->paquete_id);
 
         AuditoriaTabla::crear([
             'id_recurso' => $pago->id,

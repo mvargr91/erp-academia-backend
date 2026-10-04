@@ -19,10 +19,12 @@ class Plan extends Model
 
     protected $fillable = [
         'nombre',
+        'sede_id',
         'descripcion',
         'valor',
         'periodicidad',
         'num_clases',
+        'vigencia_dias',
         'estado',
         'usuario_creacion_id',
         'usuario_creacion_nombre',
@@ -32,11 +34,17 @@ class Plan extends Model
 
     public static function obtenerColeccionLigera($dto)
     {
-        return DB::table('planes')
-            ->select('id', 'nombre', 'valor', 'periodicidad')
+        // Planes generales (sin sede) y los de la sede pedida (?sede_id=) o la del selector.
+        $query = DB::table('planes')
+            ->select('id', 'nombre', 'valor', 'periodicidad', 'num_clases', 'vigencia_dias', 'sede_id')
             ->where('estado', 1)
-            ->orderBy('nombre', 'asc')
-            ->get();
+            ->orderBy('nombre', 'asc');
+        if (!empty($dto['sede_id'])) {
+            $query->where(fn ($q) => $q->whereNull('sede_id')->orWhere('sede_id', $dto['sede_id']));
+        } else {
+            Sede::filtrar($query, 'sede_id', true);
+        }
+        return $query->get();
     }
 
     public static function obtenerColeccion($dto)
@@ -45,10 +53,13 @@ class Plan extends Model
             ->select(
                 'id',
                 'nombre',
+                'sede_id',
+                DB::raw("COALESCE((SELECT nombre FROM sedes WHERE sedes.id = planes.sede_id), 'Todas') as sede_nombre"),
                 'descripcion',
                 'valor',
                 'periodicidad',
                 'num_clases',
+                'vigencia_dias',
                 'estado',
                 'usuario_creacion_id',
                 'usuario_creacion_nombre',
@@ -57,6 +68,8 @@ class Plan extends Model
                 'created_at as fecha_creacion',
                 'updated_at as fecha_modificacion',
             );
+
+        Sede::filtrar($query, 'sede_id', true);
 
         if (isset($dto['nombre'])) {
             $query->where('nombre', 'like', '%' . $dto['nombre'] . '%');
@@ -98,10 +111,12 @@ class Plan extends Model
         return [
             'id' => $plan->id,
             'nombre' => $plan->nombre,
+            'sede_id' => $plan->sede_id,
             'descripcion' => $plan->descripcion,
             'valor' => $plan->valor,
             'periodicidad' => $plan->periodicidad,
             'num_clases' => $plan->num_clases,
+            'vigencia_dias' => $plan->vigencia_dias,
             'estado' => $plan->estado,
             'usuario_creacion_id' => $plan->usuario_creacion_id,
             'usuario_creacion_nombre' => $plan->usuario_creacion_nombre,

@@ -50,6 +50,7 @@ class AlumnoController extends Controller
             $datos = $request->all();
             $validator = Validator::make($datos, [
                 'usuario_id' => 'integer|nullable|exists:usuarios,id',
+                'sede_id' => 'integer|nullable|exists:sedes,id',
                 'nombres' => 'string|required|max:100',
                 'apellidos' => 'string|required|max:100',
                 'documento' => 'string|nullable|max:30',
@@ -87,6 +88,15 @@ class AlumnoController extends Controller
         }
     }
 
+    /** Estado de cuenta: saldos, cobros y pagos del alumno. GET /v1/alumnos/{id}/estado-cuenta */
+    public function estadoCuenta($id)
+    {
+        if (!DB::table('alumnos')->where('id', $id)->exists()) {
+            return response(get_response_body(['El alumno no existe.']), Response::HTTP_NOT_FOUND);
+        }
+        return response(Alumno::estadoCuenta($id), Response::HTTP_OK);
+    }
+
     public function show($id)
     {
         try {
@@ -117,6 +127,7 @@ class AlumnoController extends Controller
             $validator = Validator::make($datos, [
                 'id' => 'integer|required|exists:alumnos,id',
                 'usuario_id' => 'integer|nullable|exists:usuarios,id',
+                'sede_id' => 'integer|nullable|exists:sedes,id',
                 'nombres' => 'string|required|max:100',
                 'apellidos' => 'string|required|max:100',
                 'documento' => 'string|nullable|max:30',
