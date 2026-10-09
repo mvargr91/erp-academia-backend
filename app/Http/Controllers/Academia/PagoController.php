@@ -88,6 +88,10 @@ class PagoController extends Controller
         try {
             $datos = $request->all();
             $datos['id'] = $id;
+            if (DB::table('pagos')->where('id', $id)->whereNotNull('clase_privada_id')->exists()) {
+                DB::rollback();
+                return response(get_response_body(['Este pago es de una clase personalizada: corrígelo desde la clase.']), Response::HTTP_CONFLICT);
+            }
             $validator = Validator::make($datos, array_merge(
                 ['id' => 'integer|required|exists:pagos,id'],
                 $this->reglas()

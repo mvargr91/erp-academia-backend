@@ -1,4 +1,4 @@
-@extends('emails.academia.layout', ['color' => '#1A73E8'])
+@extends('emails.academia.layout')
 
 @section('contenido')
     <p>Te recordamos tu clase personalizada: <strong>{{ $datos['fecha'] ?? '' }}</strong> a las <strong>{{ $datos['hora'] ?? '' }}</strong>

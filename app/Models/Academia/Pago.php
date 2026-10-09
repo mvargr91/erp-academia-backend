@@ -24,6 +24,8 @@ class Pago extends Model
         'curso_id',
         'plan_id',
         'paquete_id',
+        'clase_privada_id',
+        'pagador_nombre',
         'monto',
         'fecha_pago',
         'metodo_pago',
@@ -37,8 +39,9 @@ class Pago extends Model
 
     public static function obtenerColeccion($dto)
     {
+        // leftJoin: el pago de una clase suelta no tiene alumno (lo tomó una persona no registrada).
         $query = DB::table('pagos')
-            ->join('alumnos', 'alumnos.id', '=', 'pagos.alumno_id')
+            ->leftJoin('alumnos', 'alumnos.id', '=', 'pagos.alumno_id')
             ->leftJoin('cursos', 'cursos.id', '=', 'pagos.curso_id')
             ->leftJoin('ritmos', 'ritmos.id', '=', 'cursos.ritmo_id')
             ->leftJoin('planes', 'planes.id', '=', 'pagos.plan_id')
@@ -48,9 +51,10 @@ class Pago extends Model
                 'pagos.sede_id',
                 'sedes.nombre as sede_nombre',
                 'pagos.alumno_id',
-                DB::raw("CONCAT(alumnos.nombres,' ',alumnos.apellidos) as alumno_nombre"),
+                DB::raw("COALESCE(CONCAT(alumnos.nombres,' ',alumnos.apellidos), CONCAT(pagos.pagador_nombre,' (no registrado)')) as alumno_nombre"),
                 'pagos.curso_id',
-                'ritmos.nombre as curso_nombre',
+                'pagos.clase_privada_id',
+                DB::raw("COALESCE(ritmos.nombre, IF(pagos.clase_privada_id IS NULL, NULL, 'Clase personalizada')) as curso_nombre"),
                 'pagos.plan_id',
                 'planes.nombre as plan_nombre',
                 'pagos.monto',
@@ -71,7 +75,8 @@ class Pago extends Model
         if (isset($dto['nombre'])) {
             $query->where(function ($q) use ($dto) {
                 $q->where('alumnos.nombres', 'like', '%' . $dto['nombre'] . '%')
-                    ->orWhere('alumnos.apellidos', 'like', '%' . $dto['nombre'] . '%');
+                    ->orWhere('alumnos.apellidos', 'like', '%' . $dto['nombre'] . '%')
+                    ->orWhere('pagos.pagador_nombre', 'like', '%' . $dto['nombre'] . '%');
             });
         }
         if (isset($dto['alumno_id'])) {
@@ -136,6 +141,8 @@ class Pago extends Model
             'curso_id' => $pago->curso_id,
             'plan_id' => $pago->plan_id,
             'paquete_id' => $pago->paquete_id,
+            'clase_privada_id' => $pago->clase_privada_id,
+            'pagador_nombre' => $pago->pagador_nombre,
             'monto' => $pago->monto,
             'fecha_pago' => $pago->fecha_pago,
             'metodo_pago' => $pago->metodo_pago,
@@ -150,7 +157,8 @@ class Pago extends Model
         ];
     }
 
-    public static function modificarOCrear($dto)
+    /** $notificar = false cuando quien llama envía su propio correo (matrícula rápida). */
+    public static function modificarOCrear($dto, bool $notificar = true)
     {
         $user = Auth::user();
         $usuario = $user->usuario();
@@ -184,7 +192,7 @@ class Pago extends Model
         Pago::ajustarSaldo($pago->curso_id, $pago->alumno_id, -1 * (float) $pago->monto, $pago->fecha_pago, $pago->paquete_id);
 
         // Confirmación al alumno solo para pagos nuevos.
-        if (!isset($dto['id'])) {
+        if (!isset($dto['id']) && $notificar) {
             NotificadorAcademia::confirmacionPago($pago->id);
         }
 

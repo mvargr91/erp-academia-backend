@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\Seguridad\AuditoriaTabla;
+use App\Services\Academia\CalendarioCurso;
 use App\Services\Academia\NotificadorAcademia;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 
@@ -40,7 +41,12 @@ class Alumno extends Model
     public static function obtenerColeccionLigera($dto)
     {
         return DB::table('alumnos')
-            ->select('id', DB::raw("CONCAT(nombres,' ',apellidos) as nombre"))
+            ->select(
+                'id',
+                DB::raw("CONCAT(nombres,' ',apellidos) as nombre"),
+                // Ya toma un curso grupal: le aplica el precio de alumno en los paquetes.
+                DB::raw('EXISTS (SELECT 1 FROM curso_alumno ca JOIN cursos c ON c.id = ca.curso_id WHERE ca.alumno_id = alumnos.id AND ca.estado = 1 AND c.estado = 1 AND c.activo = 1) as con_curso'),
+            )
             ->where('estado', 1)
             ->orderBy('nombres', 'asc')
             ->get();
@@ -169,13 +175,30 @@ class Alumno extends Model
                 'ca.id as curso_alumno_id', 'ca.curso_id', 'ca.modalidad', 'ca.saldo', 'ca.fecha_matricula', 'ca.ultima_fecha_pago',
                 DB::raw("CONCAT(COALESCE(c.nombre, r.nombre), ' - ', DATE_FORMAT(c.hora, '%H:%i')) as curso"),
                 'p.nombre as plan', 's.nombre as sede',
+                // Para el avance del ciclo (CalendarioCurso).
+                'ca.ciclo_inicio', 'c.dia', 'c.fecha_inicio', 'c.sede_id', 'c.estado as curso_estado', 'c.activo as curso_activo',
+                'p.num_clases', 'p.periodicidad',
                 DB::raw('(SELECT COALESCE(SUM(pg.monto), 0) FROM pagos pg WHERE pg.alumno_id = ca.alumno_id AND pg.curso_id = ca.curso_id AND pg.paquete_id IS NULL) as pagado'),
             )
-            ->get()
-            ->map(fn ($c) => array_merge((array) $c, [
+            ->get();
+        $calendario = new CalendarioCurso();
+        $cursos = $cursos->map(function ($c) use ($calendario) {
+            $fila = [
+                'curso_alumno_id' => $c->curso_alumno_id, 'curso_id' => $c->curso_id, 'modalidad' => $c->modalidad,
+                'fecha_matricula' => $c->fecha_matricula, 'ultima_fecha_pago' => $c->ultima_fecha_pago,
+                'curso' => $c->curso, 'plan' => $c->plan, 'sede' => $c->sede,
                 // Cobrado hasta hoy = lo pagado más lo que aún debe.
                 'saldo' => (float) $c->saldo, 'pagado' => (float) $c->pagado, 'cobrado' => (float) $c->pagado + (float) $c->saldo,
-            ]));
+                // Curso desactivado: ya no se le cobran más ciclos.
+                'curso_activo' => (bool) ($c->curso_estado && $c->curso_activo),
+            ];
+            // Clases del ciclo vigente que ya se dictaron (solo si paga por ciclos).
+            if ($c->modalidad === 'ciclo' && $c->periodicidad === 'mensual') {
+                $ciclo = $calendario->ciclo($c, $c, CalendarioCurso::clasesPorCiclo($c->num_clases));
+                $fila += CalendarioCurso::avance($ciclo, Carbon::today()) + ['proximo_pago' => $ciclo['proximo_pago']->toDateString()];
+            }
+            return $fila;
+        });
 
         $paquetes = DB::table('paquetes_alumno as pa')
             ->leftJoin('planes as p', 'p.id', '=', 'pa.plan_id')
@@ -241,7 +264,8 @@ class Alumno extends Model
         ];
     }
 
-    public static function modificarOCrear($dto)
+    /** $notificar = false cuando quien llama envía su propio correo (matrícula rápida). */
+    public static function modificarOCrear($dto, bool $notificar = true)
     {
         $user = Auth::user();
         $usuario = $user->usuario();
@@ -262,7 +286,7 @@ class Alumno extends Model
         }
 
         // Bienvenida a la academia solo al crear el alumno.
-        if (!isset($dto['id'])) {
+        if (!isset($dto['id']) && $notificar) {
             NotificadorAcademia::bienvenidaAlumno($alumno->id);
         }
 

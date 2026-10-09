@@ -99,20 +99,36 @@ class Paquetes
         return ['restantes' => (int) $restantes, 'vence' => $vence];
     }
 
+    /** El paquete indicado, si en $fecha se le puede descontar una clase (activo, sin vencer y con clases). */
+    public static function disponible(int $paqueteId, Carbon $fecha): ?object
+    {
+        $paquete = DB::table('paquetes_alumno')->find($paqueteId);
+        if (!$paquete) {
+            return null;
+        }
+        $usadas = self::usadas([$paqueteId])[$paqueteId] ?? 0;
+        return self::estado($paquete, $usadas, $fecha) === 'activo' ? $paquete : null;
+    }
+
     /**
      * Descuenta una clase (idempotente por asistencia/clase privada y alumno).
-     * Devuelve el consumo o null si el alumno no tiene paquete vigente.
+     * Con $paqueteId se descuenta de ese paquete; si no, del vigente que vence primero.
+     * Devuelve el consumo o null si no hay paquete del que descontar.
      */
-    public static function consumir(int $alumnoId, Carbon $fecha, string $origen, ?int $asistenciaId, ?int $clasePrivadaId, string $motivo): ?object
+    public static function consumir(int $alumnoId, Carbon $fecha, string $origen, ?int $asistenciaId, ?int $clasePrivadaId, string $motivo, ?int $paqueteId = null): ?object
     {
         $existente = self::buscarConsumo($alumnoId, $asistenciaId, $clasePrivadaId);
         if ($existente) {
-            if ($existente->motivo !== $motivo) {
-                DB::table('consumos_paquete')->where('id', $existente->id)->update(['motivo' => $motivo, 'updated_at' => Carbon::now()]);
+            $cambios = array_filter([
+                'motivo' => $existente->motivo !== $motivo ? $motivo : null,
+                'fecha' => $existente->fecha !== $fecha->toDateString() ? $fecha->toDateString() : null,
+            ]);
+            if ($cambios) {
+                DB::table('consumos_paquete')->where('id', $existente->id)->update($cambios + ['updated_at' => Carbon::now()]);
             }
             return $existente;
         }
-        $paquete = self::vigente($alumnoId, $fecha);
+        $paquete = $paqueteId ? self::disponible($paqueteId, $fecha) : self::vigente($alumnoId, $fecha);
         if (!$paquete) {
             return null;
         }

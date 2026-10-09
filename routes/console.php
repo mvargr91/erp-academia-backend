@@ -10,7 +10,7 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-// Academias: mensualidades, recordatorios de pago y avisos de mora (todas las academias activas).
+// Academias: ciclos de clases, recordatorios de pago y avisos de mora (todas las academias activas).
 Schedule::command('notificaciones:enviar')->dailyAt('08:00')->withoutOverlapping();
 
 // Festivos de Colombia del año siguiente (y repaso del actual), cada 1 de diciembre.

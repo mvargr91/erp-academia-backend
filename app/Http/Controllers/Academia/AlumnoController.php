@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
+use App\Support\CorreoUnico;
 use App\Models\Academia\Alumno;
 use Illuminate\Support\Facades\Validator;
 
@@ -62,6 +63,7 @@ class AlumnoController extends Controller
                 'telefono_emergencia' => 'string|nullable|max:30',
                 'estado' => 'boolean|required',
             ]);
+            CorreoUnico::validar($validator, 'alumnos', $datos['correo'] ?? null);
 
             if ($validator->fails()) {
                 return response(
@@ -139,6 +141,7 @@ class AlumnoController extends Controller
                 'telefono_emergencia' => 'string|nullable|max:30',
                 'estado' => 'boolean|required',
             ]);
+            CorreoUnico::validar($validator, 'alumnos', $datos['correo'] ?? null, (int) $id);
 
             if ($validator->fails()) {
                 return response(

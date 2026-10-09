@@ -23,6 +23,7 @@ class CursoController extends Controller
             'ritmo_id' => 'integer|required|exists:ritmos,id',
             'profesor_id' => 'integer|nullable|exists:profesores,id',
             'plan_id' => 'integer|nullable|exists:planes,id',
+            'en_pareja' => 'boolean|nullable',
             'dia' => 'integer|required|between:0,6',
             'hora' => 'required|date_format:H:i',
             'fecha_inicio' => 'date|nullable',
@@ -133,6 +134,15 @@ class CursoController extends Controller
             $validator = Validator::make($datos, ['id' => 'integer|required|exists:cursos,id']);
             if ($validator->fails()) {
                 return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+            }
+
+            // Los pagos se conservan: un curso que ya recibió pagos se desactiva, no se elimina.
+            if (DB::table('pagos')->where('curso_id', $id)->exists()) {
+                DB::rollback();
+                return response(
+                    get_response_body(['El curso tiene pagos registrados y no se puede eliminar. Desactívalo: así deja de cobrar ciclos a sus alumnos.']),
+                    Response::HTTP_CONFLICT
+                );
             }
 
             $eliminado = Curso::eliminar($id);

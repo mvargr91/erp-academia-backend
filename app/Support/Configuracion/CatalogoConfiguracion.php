@@ -18,11 +18,6 @@ class CatalogoConfiguracion
             'CLASES_POR_CICLO' => ['Clases por ciclo de pago cuando el plan no indica cuántas', 'numero', '4', 'Cobro a alumnos'],
             'DIAS_RECORDATORIO_PAGO' => ['Días antes del próximo ciclo para enviar el recordatorio de pago', 'numero', '5', 'Cobro a alumnos'],
             'DIAS_ENTRE_AVISOS_MORA' => ['Cada cuántos días se repite el aviso de mora', 'numero', '7', 'Cobro a alumnos'],
-            // Precios de cursos grupales (por ciclo, según el orden de matrícula del alumno)
-            'PRECIO_PAREJA' => ['Precio por persona cuando el curso se toma en pareja (0 = no aplica)', 'numero', '0', 'Precios de cursos'],
-            'PRECIO_SEGUNDO_CURSO' => ['Precio del 2.º curso del mismo alumno (0 = precio normal del plan)', 'numero', '0', 'Precios de cursos'],
-            'DESC_TERCER_CURSO' => ['Descuento del 3.er curso sobre el precio de su plan', 'porcentaje', '50', 'Precios de cursos'],
-            'DESC_CUARTO_CURSO' => ['Descuento del 4.º curso en adelante (100 = gratis)', 'porcentaje', '100', 'Precios de cursos'],
             // Clases personalizadas y paquetes
             'HORAS_CANCELACION_CLASE' => ['Horas mínimas de anticipación para cancelar una clase privada sin que descuente', 'numero', '24', 'Clases personalizadas'],
             'DIAS_AVISO_VENCE_PAQUETE' => ['Días antes del vencimiento de un paquete para avisar al alumno', 'numero', '5', 'Paquetes'],
@@ -117,6 +112,19 @@ class CatalogoConfiguracion
                 . '<p>Saldo pendiente: <strong>{saldo}</strong>.</p>',
                 $alumno + ['valor' => 'Valor pagado', 'concepto' => 'Curso o paquete pagado', 'fecha_pago' => 'Fecha del pago',
                     'metodo' => 'Medio de pago', 'saldo' => 'Saldo que queda'] + $academia,
+            ],
+            'MATRICULA_RESUMEN' => [
+                'Resumen de matrícula (matrícula rápida)',
+                'Tu matrícula en {academia}',
+                '<p>¡Te damos la bienvenida a <strong>{academia}</strong>! Este es el resumen de tu matrícula:</p>'
+                . '<p style="white-space:pre-line">{cursos}</p>'
+                . '<ul><li>Total: <strong>{valor}</strong></li><li>Pagado: <strong>{pagado}</strong></li>'
+                . '<li>Saldo pendiente: <strong>{saldo}</strong></li></ul>'
+                . '<p>Si una clase cae en festivo o en un cierre de la academia, se corre a la semana siguiente.</p>'
+                . '<p>Trae ropa cómoda, hidratación y muchas ganas de bailar. ¡Nos vemos en clase!</p>',
+                $alumno + ['cursos' => 'Cursos matriculados (uno por línea: horario, primera clase y valor)', 'valor' => 'Total de la matrícula',
+                    'pagado' => 'Valor pagado al matricularse', 'saldo' => 'Saldo que queda', 'fecha_pago' => 'Fecha del pago',
+                    'metodo' => 'Medio de pago'] + $academia,
             ],
             'CUMPLEANOS' => [
                 'Feliz cumpleaños',

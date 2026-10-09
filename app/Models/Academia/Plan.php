@@ -22,6 +22,7 @@ class Plan extends Model
         'sede_id',
         'descripcion',
         'valor',
+        'valor_alumno',
         'periodicidad',
         'num_clases',
         'vigencia_dias',
@@ -36,7 +37,7 @@ class Plan extends Model
     {
         // Planes generales (sin sede) y los de la sede pedida (?sede_id=) o la del selector.
         $query = DB::table('planes')
-            ->select('id', 'nombre', 'valor', 'periodicidad', 'num_clases', 'vigencia_dias', 'sede_id')
+            ->select('id', 'nombre', 'valor', 'valor_alumno', 'periodicidad', 'num_clases', 'vigencia_dias', 'sede_id')
             ->where('estado', 1)
             ->orderBy('nombre', 'asc');
         if (!empty($dto['sede_id'])) {
@@ -57,6 +58,7 @@ class Plan extends Model
                 DB::raw("COALESCE((SELECT nombre FROM sedes WHERE sedes.id = planes.sede_id), 'Todas') as sede_nombre"),
                 'descripcion',
                 'valor',
+                'valor_alumno',
                 'periodicidad',
                 'num_clases',
                 'vigencia_dias',
@@ -114,6 +116,7 @@ class Plan extends Model
             'sede_id' => $plan->sede_id,
             'descripcion' => $plan->descripcion,
             'valor' => $plan->valor,
+            'valor_alumno' => $plan->valor_alumno,
             'periodicidad' => $plan->periodicidad,
             'num_clases' => $plan->num_clases,
             'vigencia_dias' => $plan->vigencia_dias,

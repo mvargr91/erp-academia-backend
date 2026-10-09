@@ -188,6 +188,20 @@ class CalendarioCurso
         ];
     }
 
+    /**
+     * Avance de un ciclo a $hoy: cuántas de sus clases ya se dictaron (la de hoy cuenta).
+     * Va por calendario, no por asistencia: la clase se consume aunque el alumno falte.
+     * @return array{clases_consumidas: int, clases_ciclo: int}
+     */
+    public static function avance(array $ciclo, Carbon $hoy): array
+    {
+        $hoy = $hoy->copy()->endOfDay();
+        return [
+            'clases_consumidas' => count(array_filter($ciclo['clases'], fn (Carbon $clase) => $clase->lte($hoy))),
+            'clases_ciclo' => $ciclo['clases_por_ciclo'],
+        ];
+    }
+
     /** Primera clase del curso desde una fecha (para iniciar el ciclo de una matrícula nueva). */
     public function primeraClase(object $curso, Carbon $desde): Carbon
     {

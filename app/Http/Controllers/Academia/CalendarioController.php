@@ -3,17 +3,17 @@
 namespace App\Http\Controllers\Academia;
 
 use Carbon\Carbon;
+use DomainException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
 use App\Models\Academia\Curso;
-use App\Services\Academia\Tarifas;
 use App\Services\Academia\Paquetes;
 use Illuminate\Support\Facades\Validator;
 use App\Services\Academia\CalendarioCurso;
 
-/** Calendario de clases de un curso con festivos/cierres y el ciclo de pago de cada alumno. */
+/** Calendario de clases de un curso con sus festivos y cierres. */
 class CalendarioController extends Controller
 {
     private const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -46,31 +46,6 @@ class CalendarioController extends Controller
         unset($semana);
 
         $clasesPorCiclo = CalendarioCurso::clasesPorCiclo($curso->num_clases);
-        $alumnos = DB::table('curso_alumno as ca')
-            ->join('alumnos as a', 'a.id', '=', 'ca.alumno_id')
-            ->where('ca.curso_id', $id)
-            ->where('ca.estado', 1)
-            ->select('a.id as alumno_id', DB::raw("CONCAT(a.nombres,' ',a.apellidos) as nombre"),
-                'ca.id as curso_alumno_id', 'ca.fecha_matricula', 'ca.ciclo_inicio', 'ca.saldo', 'ca.modalidad', 'ca.pareja_alumno_id')
-            ->orderBy('a.nombres')
-            ->get()
-            ->map(function ($m) use ($calendario, $curso, $clasesPorCiclo) {
-                $fila = ['alumno_id' => $m->alumno_id, 'nombre' => $m->nombre, 'modalidad' => $m->modalidad,
-                    'saldo' => (float) $m->saldo, 'pareja_alumno_id' => $m->pareja_alumno_id];
-                if ($m->modalidad === 'paquete') {
-                    return $fila + ['paquete' => Paquetes::disponiblesHoy($m->alumno_id)];
-                }
-                $ciclo = $calendario->ciclo($curso, $m, $clasesPorCiclo);
-                $precio = Tarifas::precio($m->curso_alumno_id);
-                return $fila + [
-                    'precio_ciclo' => $precio['valor'],
-                    'precio_regla' => $precio['regla'],
-                    'ciclo_inicio' => $ciclo['inicio']->toDateString(),
-                    'ciclo_fin' => $ciclo['fin']->toDateString(),
-                    'proximo_pago' => $ciclo['proximo_pago']->toDateString(),
-                ];
-            });
-
         return response([
             'curso' => [
                 'id' => $curso->id,
@@ -81,7 +56,6 @@ class CalendarioController extends Controller
                 'fecha_inicio' => $curso->fecha_inicio,
             ],
             'semanas' => $lista,
-            'alumnos' => $alumnos,
         ], Response::HTTP_OK);
     }
 
@@ -103,38 +77,27 @@ class CalendarioController extends Controller
     }
 
     /**
-     * Asigna (o quita) la pareja de un alumno en este curso. Se guarda en ambas matrículas,
-     * deshaciendo parejas anteriores, y aplica desde el siguiente ciclo (precio pareja).
+     * Define si un alumno paga este curso individual o en pareja con otro alumno del mismo curso.
+     * { pareja_alumno_id: id|null, ajustar_ciclo: bool } → devuelve los matriculados actualizados.
      */
     public function pareja(Request $request, $id, $alumnoId)
     {
-        $validator = Validator::make($request->all(), ['pareja_alumno_id' => 'nullable|integer']);
+        $validator = Validator::make($request->all(), [
+            'pareja_alumno_id' => 'nullable|integer|exists:alumnos,id',
+            'ajustar_ciclo' => 'nullable|boolean',
+        ]);
         if ($validator->fails()) {
             return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
         }
-        $parejaId = $request->pareja_alumno_id ? (int) $request->pareja_alumno_id : null;
-        $matriculados = DB::table('curso_alumno')->where('curso_id', $id)->where('estado', 1)->pluck('alumno_id')->map(fn ($x) => (int) $x)->all();
-        if (!in_array((int) $alumnoId, $matriculados)) {
-            return response(get_response_body(['El alumno no está matriculado en este curso.']), Response::HTTP_BAD_REQUEST);
+        $parejaId = $request->filled('pareja_alumno_id') ? (int) $request->pareja_alumno_id : null;
+        try {
+            DB::transaction(fn () => Curso::emparejar((int) $id, (int) $alumnoId, $parejaId, $request->boolean('ajustar_ciclo')));
+        } catch (DomainException $e) {
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_CONFLICT);
         }
-        if ($parejaId && ($parejaId === (int) $alumnoId || !in_array($parejaId, $matriculados))) {
-            return response(get_response_body(['La pareja debe ser otro alumno matriculado en el mismo curso.']), Response::HTTP_BAD_REQUEST);
-        }
-
-        DB::transaction(function () use ($id, $alumnoId, $parejaId) {
-            $involucrados = array_filter([(int) $alumnoId, $parejaId]);
-            // Deshace parejas anteriores de ambos.
-            DB::table('curso_alumno')->where('curso_id', $id)
-                ->where(fn ($q) => $q->whereIn('alumno_id', $involucrados)->orWhereIn('pareja_alumno_id', $involucrados))
-                ->update(['pareja_alumno_id' => null, 'updated_at' => now()]);
-            if ($parejaId) {
-                DB::table('curso_alumno')->where('curso_id', $id)->where('alumno_id', $alumnoId)->update(['pareja_alumno_id' => $parejaId]);
-                DB::table('curso_alumno')->where('curso_id', $id)->where('alumno_id', $parejaId)->update(['pareja_alumno_id' => $alumnoId]);
-            }
-        });
-        $mensaje = $parejaId
-            ? 'Pareja asignada: desde el siguiente ciclo cada uno paga el precio de pareja (si es menor que su precio actual).'
-            : 'Se quitó la pareja: desde el siguiente ciclo vuelven a su precio normal.';
-        return response(get_response_body([$mensaje, 1]), Response::HTTP_OK);
+        $cuando = $request->boolean('ajustar_ciclo') ? 'Se ajustó el saldo del ciclo actual.' : 'El precio aplica desde el siguiente ciclo.';
+        $mensaje = $parejaId ? "Los dos alumnos ahora pagan en pareja. {$cuando}" : "El alumno ahora paga individual. {$cuando}";
+        return response(get_response_body([$mensaje, 1], Curso::cargar($id)['matriculados']), Response::HTTP_OK);
     }
+
 }

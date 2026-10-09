@@ -4,6 +4,7 @@ use Illuminate\Http\Request;
 use App\Http\Controllers\Seguridad;
 use App\Http\Controllers\Academia;
 use App\Http\Controllers\Central;
+use App\Support\Permisos;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\UserController;
 use Laravel\Passport\Http\Controllers\AccessTokenController;
@@ -27,6 +28,7 @@ Route::post('oauth/token', [AccessTokenController::class, 'issueToken'])->name('
 // Apariencia de la academia (colores, logos, login): pública porque el login la pinta antes de autenticar.
 Route::get('/apariencia', [Academia\AparienciaController::class, 'show'])->name('publico.apariencia');
 
+// Las lecturas de catálogos se perfilan con Permisos::lectura (quien usa el catálogo en su opción puede leerlo).
 Route::group(['middleware' => ['auth:api']], function (){
     // User
     Route::group(["prefix" => "users"],function(){
@@ -46,11 +48,10 @@ Route::group(['middleware' => ['auth:api']], function (){
 
     // Usuarios
     Route::group(["prefix" => "usuarios"],function(){
-        // El formulario de reservas lista clientes: se permite también a quien gestiona reservas.
-        Route::get('/', [Seguridad\UsuarioController::class,'index'])->name('usuarios.index')->middleware('permission:ListarUsuario|ListarReserva');
+        Route::get('/', [Seguridad\UsuarioController::class,'index'])->name('usuarios.index')->middleware('permission:ListarUsuario');
         Route::post('/', [Seguridad\UsuarioController::class,'store'])->name('usuarios.store')->middleware('permission:CrearUsuario');
         Route::get('/{id}', [Seguridad\UsuarioController::class,'show'])->name('usuarios.show')->middleware('permission:ListarUsuario');
-        Route::put('/cambio-clave', [Seguridad\UsuarioController::class,'changePassword'])->name('usuarios.changePassword')->middleware('permission:CambiarClave');
+        Route::put('/cambio-clave', [Seguridad\UsuarioController::class,'changePassword'])->name('usuarios.changePassword')->middleware('permission:CambiarClaveUsuario');
         Route::put('/{id}', [Seguridad\UsuarioController::class,'update'])->name('usuarios.update')->middleware('permission:ModificarUsuario');
         Route::delete('/{id}', [Seguridad\UsuarioController::class,'destroy'])->name('usuarios.delete')->middleware('permission:EliminarUsuario');
     });
@@ -103,9 +104,8 @@ Route::group(['middleware' => ['auth:api']], function (){
         Route::delete('/{id}', [Seguridad\PermisoController::class,'destroy'])->name('permisos.delete')->middleware('permission:EliminarAccionPermiso');
     });
 
-    // Auditoría y Parametrización no tienen permisos propios en BD: quedan solo para el administrador.
     // Auditoria Tablas
-    Route::group(["prefix" => "auditoria-tablas", "middleware" => ["role:SuperSu"]],function(){
+    Route::group(["prefix" => "auditoria-tablas", "middleware" => ["permission:ListarAuditorias"]],function(){
         Route::get('/', [Seguridad\AuditoriaTablaController::class,'index'])->name('auditoria-tablas.index');
     });
 
@@ -126,7 +126,7 @@ Route::group(['middleware' => ['auth:api']], function (){
 
     // Plantillas de correo
     Route::group(["prefix" => "plantillas-correo"], function () {
-        Route::get('/', [Academia\PlantillaCorreoController::class, 'index'])->name('plantillas-correo.index')->middleware('permission:ListarPlantillaCorreo');
+        Route::get('/', [Academia\PlantillaCorreoController::class, 'index'])->name('plantillas-correo.index')->middleware('permission:ListarPlantillaCorreo|CrearEnvioCorreo');
         Route::get('/{id}', [Academia\PlantillaCorreoController::class, 'show'])->name('plantillas-correo.show')->middleware('permission:ListarPlantillaCorreo');
         Route::get('/{id}/por-defecto', [Academia\PlantillaCorreoController::class, 'porDefecto'])->name('plantillas-correo.defecto')->middleware('permission:ModificarPlantillaCorreo');
         Route::post('/{id}/vista-previa', [Academia\PlantillaCorreoController::class, 'vistaPrevia'])->name('plantillas-correo.vista')->middleware('permission:ListarPlantillaCorreo');
@@ -172,10 +172,17 @@ Route::group(['middleware' => ['auth:api']], function (){
 
     // Paquetes de clases de los alumnos (cursos grupales y clases privadas)
     Route::group(["prefix" => "paquetes"], function () {
-        Route::get('/', [Academia\PaqueteController::class, 'index'])->name('paquetes.index')->middleware('permission:ListarPaquete|CrearPago');
+        Route::get('/', [Academia\PaqueteController::class, 'index'])->name('paquetes.index')->middleware(Permisos::lectura(['Paquete', 'Pago'], ['PagarPaquete']));
         Route::post('/', [Academia\PaqueteController::class, 'store'])->name('paquetes.store')->middleware('permission:CrearPaquete');
-        Route::get('/{id}', [Academia\PaqueteController::class, 'show'])->name('paquetes.show')->middleware('permission:ListarPaquete');
+        Route::get('/{id}', [Academia\PaqueteController::class, 'show'])->name('paquetes.show')->middleware(Permisos::lectura(['Paquete'], ['PagarPaquete', 'RegistrarClasesPaquete']));
         Route::put('/{id}', [Academia\PaqueteController::class, 'update'])->name('paquetes.update')->middleware('permission:ModificarPaquete');
+        // Planilla de clases del paquete (registrar, corregir o quitar cada clase): permiso propio RegistrarClases.
+        Route::post('/{id}/clases', [Academia\PaqueteController::class, 'guardarClase'])->name('paquetes.clases.store')->middleware('permission:RegistrarClasesPaquete');
+        Route::put('/{id}/clases/{claseId}', [Academia\PaqueteController::class, 'guardarClase'])->name('paquetes.clases.update')->middleware('permission:RegistrarClasesPaquete');
+        Route::delete('/{id}/clases/{claseId}', [Academia\PaqueteController::class, 'eliminarClase'])->name('paquetes.clases.delete')->middleware('permission:RegistrarClasesPaquete');
+        // Pago del paquete: opción aparte con su propio permiso (Pagar), distinto de crear o modificar el paquete.
+        Route::post('/{id}/pagos', [Academia\PaqueteController::class, 'registrarPago'])->name('paquetes.pagos.store')->middleware('permission:PagarPaquete');
+        Route::delete('/{id}/pagos/{pagoId}', [Academia\PaqueteController::class, 'eliminarPago'])->name('paquetes.pagos.delete')->middleware('permission:PagarPaquete');
         Route::delete('/{id}', [Academia\PaqueteController::class, 'destroy'])->name('paquetes.delete')->middleware('permission:EliminarPaquete');
     });
 
@@ -183,9 +190,11 @@ Route::group(['middleware' => ['auth:api']], function (){
     Route::group(["prefix" => "clases-privadas"], function () {
         Route::get('/', [Academia\ClasePrivadaController::class, 'index'])->name('clases-privadas.index')->middleware('permission:ListarClasePrivada');
         Route::post('/', [Academia\ClasePrivadaController::class, 'store'])->name('clases-privadas.store')->middleware('permission:CrearClasePrivada');
-        Route::get('/{id}', [Academia\ClasePrivadaController::class, 'show'])->name('clases-privadas.show')->middleware('permission:ListarClasePrivada');
+        Route::get('/{id}', [Academia\ClasePrivadaController::class, 'show'])->name('clases-privadas.show')->middleware(Permisos::lectura(['ClasePrivada'], ['PagarClasePrivada', 'RegistrarAsistenciaClasePrivada']));
         Route::put('/{id}', [Academia\ClasePrivadaController::class, 'update'])->name('clases-privadas.update')->middleware('permission:ModificarClasePrivada');
-        Route::put('/{id}/registrar', [Academia\ClasePrivadaController::class, 'registrar'])->name('clases-privadas.registrar')->middleware('permission:ModificarClasePrivada');
+        Route::put('/{id}/registrar', [Academia\ClasePrivadaController::class, 'registrar'])->name('clases-privadas.registrar')->middleware('permission:RegistrarAsistenciaClasePrivada');
+        // El cobro de la clase tiene su propio permiso (Pagar), distinto del de registrar asistencia.
+        Route::put('/{id}/pago', [Academia\ClasePrivadaController::class, 'pago'])->name('clases-privadas.pago')->middleware('permission:PagarClasePrivada');
         Route::delete('/{id}', [Academia\ClasePrivadaController::class, 'destroy'])->name('clases-privadas.delete')->middleware('permission:EliminarClasePrivada');
     });
 
@@ -210,7 +219,7 @@ Route::group(['middleware' => ['auth:api']], function (){
     // Estado de la suscripción de la academia actual (aviso de pago dentro del ERP).
     Route::get('mi-suscripcion', [Central\SuscripcionController::class, 'show'])->name('mi-suscripcion.show');
 
-    // Sedes de la academia (la lista ligera alimenta el selector del encabezado)
+    // Sedes de la academia. Leerlas no exige permiso: la lista alimenta el selector del encabezado de todos los usuarios.
     Route::group(["prefix" => "sedes"], function () {
         Route::get('/', [Academia\SedeController::class, 'index'])->name('sedes.index');
         Route::post('/', [Academia\SedeController::class, 'store'])->name('sedes.store')->middleware('permission:CrearSede');
@@ -221,72 +230,84 @@ Route::group(['middleware' => ['auth:api']], function (){
 
     // Ritmos
     Route::group(["prefix" => "ritmos"], function () {
-        Route::get('/', [Academia\RitmoController::class, 'index'])->name('ritmos.index');
+        Route::get('/', [Academia\RitmoController::class, 'index'])->name('ritmos.index')->middleware(Permisos::lectura(['Ritmo', 'Curso']));
         Route::post('/', [Academia\RitmoController::class, 'store'])->name('ritmos.store')->middleware('permission:CrearRitmo');
-        Route::get('/{id}', [Academia\RitmoController::class, 'show'])->name('ritmos.show');
+        Route::get('/{id}', [Academia\RitmoController::class, 'show'])->name('ritmos.show')->middleware(Permisos::lectura(['Ritmo', 'Curso']));
         Route::put('/{id}', [Academia\RitmoController::class, 'update'])->name('ritmos.update')->middleware('permission:ModificarRitmo');
         Route::delete('/{id}', [Academia\RitmoController::class, 'destroy'])->name('ritmos.delete')->middleware('permission:EliminarRitmo');
     });
 
+    // Tarifas: escalas de precio por cantidad de cursos (individual y pareja)
+    Route::group(["prefix" => "tarifas"], function () {
+        Route::get('/', [Academia\TarifaController::class, 'index'])->name('tarifas.index')->middleware(Permisos::lectura(['Tarifa']));
+        Route::put('/', [Academia\TarifaController::class, 'update'])->name('tarifas.update')->middleware('permission:ModificarTarifa');
+    });
+
     // Planes
     Route::group(["prefix" => "planes"], function () {
-        Route::get('/', [Academia\PlanController::class, 'index'])->name('planes.index');
+        Route::get('/', [Academia\PlanController::class, 'index'])->name('planes.index')->middleware(Permisos::lectura(['Plan', 'Curso', 'Pago', 'Paquete', 'Tarifa']));
         Route::post('/', [Academia\PlanController::class, 'store'])->name('planes.store')->middleware('permission:CrearPlan');
-        Route::get('/{id}', [Academia\PlanController::class, 'show'])->name('planes.show');
+        Route::get('/{id}', [Academia\PlanController::class, 'show'])->name('planes.show')->middleware(Permisos::lectura(['Plan', 'Curso', 'Pago', 'Paquete', 'Tarifa']));
         Route::put('/{id}', [Academia\PlanController::class, 'update'])->name('planes.update')->middleware('permission:ModificarPlan');
         Route::delete('/{id}', [Academia\PlanController::class, 'destroy'])->name('planes.delete')->middleware('permission:EliminarPlan');
     });
 
     // Profesores
     Route::group(["prefix" => "profesores"], function () {
-        Route::get('/', [Academia\ProfesorController::class, 'index'])->name('profesores.index');
+        Route::get('/', [Academia\ProfesorController::class, 'index'])->name('profesores.index')->middleware(Permisos::lectura(['Profesor', 'Curso', 'ClasePrivada', 'Paquete'], ['RegistrarClasesPaquete']));
         Route::post('/', [Academia\ProfesorController::class, 'store'])->name('profesores.store')->middleware('permission:CrearProfesor');
-        Route::get('/{id}', [Academia\ProfesorController::class, 'show'])->name('profesores.show');
+        Route::get('/{id}', [Academia\ProfesorController::class, 'show'])->name('profesores.show')->middleware(Permisos::lectura(['Profesor', 'Curso', 'ClasePrivada', 'Paquete']));
         Route::put('/{id}', [Academia\ProfesorController::class, 'update'])->name('profesores.update')->middleware('permission:ModificarProfesor');
         Route::delete('/{id}', [Academia\ProfesorController::class, 'destroy'])->name('profesores.delete')->middleware('permission:EliminarProfesor');
     });
 
     // Alumnos
     Route::group(["prefix" => "alumnos"], function () {
-        Route::get('/', [Academia\AlumnoController::class, 'index'])->name('alumnos.index');
+        Route::get('/', [Academia\AlumnoController::class, 'index'])->name('alumnos.index')->middleware(Permisos::lectura(['Alumno', 'Curso', 'Pago', 'Paquete', 'ClasePrivada', 'Matricula', 'EnvioCorreo']));
         Route::post('/', [Academia\AlumnoController::class, 'store'])->name('alumnos.store')->middleware('permission:CrearAlumno');
-        Route::get('/{id}/estado-cuenta', [Academia\AlumnoController::class, 'estadoCuenta'])->name('alumnos.estado-cuenta');
-        Route::get('/{id}', [Academia\AlumnoController::class, 'show'])->name('alumnos.show');
+        Route::get('/{id}/estado-cuenta', [Academia\AlumnoController::class, 'estadoCuenta'])->name('alumnos.estado-cuenta')->middleware('permission:EstadoCuentaAlumno|CrearMatricula');
+        Route::get('/{id}', [Academia\AlumnoController::class, 'show'])->name('alumnos.show')->middleware(Permisos::lectura(['Alumno', 'Curso', 'Pago', 'Paquete', 'ClasePrivada', 'Matricula', 'EnvioCorreo']));
         Route::put('/{id}', [Academia\AlumnoController::class, 'update'])->name('alumnos.update')->middleware('permission:ModificarAlumno');
         Route::delete('/{id}', [Academia\AlumnoController::class, 'destroy'])->name('alumnos.delete')->middleware('permission:EliminarAlumno');
     });
 
+    // Matrícula rápida: alumno + cursos + pago en un solo paso
+    Route::group(["prefix" => "matriculas"], function () {
+        Route::post('/cotizar', [Academia\MatriculaController::class, 'cotizar'])->name('matriculas.cotizar')->middleware('permission:CrearMatricula');
+        Route::post('/', [Academia\MatriculaController::class, 'store'])->name('matriculas.store')->middleware('permission:CrearMatricula');
+    });
+
     // Cursos
     Route::group(["prefix" => "cursos"], function () {
-        Route::get('/', [Academia\CursoController::class, 'index'])->name('cursos.index');
+        Route::get('/', [Academia\CursoController::class, 'index'])->name('cursos.index')->middleware(Permisos::lectura(['Curso', 'Pago', 'Asistencia', 'TomaAsistencia', 'Matricula', 'EnvioCorreo']));
         Route::post('/', [Academia\CursoController::class, 'store'])->name('cursos.store')->middleware('permission:CrearCurso');
-        Route::get('/{id}/calendario', [Academia\CalendarioController::class, 'curso'])->name('cursos.calendario');
-        Route::put('/{id}/alumnos/{alumnoId}/modalidad', [Academia\CalendarioController::class, 'modalidad'])->name('cursos.modalidad')->middleware('permission:ModificarCurso');
-        Route::put('/{id}/alumnos/{alumnoId}/pareja', [Academia\CalendarioController::class, 'pareja'])->name('cursos.pareja')->middleware('permission:ModificarCurso');
-        Route::get('/{id}', [Academia\CursoController::class, 'show'])->name('cursos.show');
+        Route::get('/{id}/calendario', [Academia\CalendarioController::class, 'curso'])->name('cursos.calendario')->middleware(Permisos::lectura(['Curso']));
+        Route::put('/{id}/alumnos/{alumnoId}/modalidad', [Academia\CalendarioController::class, 'modalidad'])->name('cursos.modalidad')->middleware('permission:FormaDePagoCurso');
+        Route::put('/{id}/alumnos/{alumnoId}/pareja', [Academia\CalendarioController::class, 'pareja'])->name('cursos.pareja')->middleware('permission:FormaDePagoCurso');
+        Route::get('/{id}', [Academia\CursoController::class, 'show'])->name('cursos.show')->middleware(Permisos::lectura(['Curso', 'Pago', 'Asistencia', 'TomaAsistencia', 'Matricula', 'EnvioCorreo']));
         Route::put('/{id}', [Academia\CursoController::class, 'update'])->name('cursos.update')->middleware('permission:ModificarCurso');
         Route::delete('/{id}', [Academia\CursoController::class, 'destroy'])->name('cursos.delete')->middleware('permission:EliminarCurso');
     });
 
     // Pagos
     Route::group(["prefix" => "pagos"], function () {
-        Route::get('/', [Academia\PagoController::class, 'index'])->name('pagos.index');
+        Route::get('/', [Academia\PagoController::class, 'index'])->name('pagos.index')->middleware(Permisos::lectura(['Pago']));
         Route::post('/', [Academia\PagoController::class, 'store'])->name('pagos.store')->middleware('permission:CrearPago');
-        Route::get('/{id}', [Academia\PagoController::class, 'show'])->name('pagos.show');
+        Route::get('/{id}', [Academia\PagoController::class, 'show'])->name('pagos.show')->middleware(Permisos::lectura(['Pago']));
         Route::put('/{id}', [Academia\PagoController::class, 'update'])->name('pagos.update')->middleware('permission:ModificarPago');
         Route::delete('/{id}', [Academia\PagoController::class, 'destroy'])->name('pagos.delete')->middleware('permission:EliminarPago');
     });
 
-    // Asistencias
+    // Asistencias (la opción "Tomar asistencia" guarda por estas mismas rutas con sus propios permisos)
     Route::group(["prefix" => "asistencias"], function () {
-        Route::get('/', [Academia\AsistenciaController::class, 'index'])->name('asistencias.index');
-        Route::post('/', [Academia\AsistenciaController::class, 'store'])->name('asistencias.store')->middleware('permission:CrearAsistencia');
-        Route::get('/preparar', [Academia\AsistenciaController::class, 'preparar'])->name('asistencias.preparar');
-        Route::get('/{id}', [Academia\AsistenciaController::class, 'show'])->name('asistencias.show');
-        Route::put('/{id}', [Academia\AsistenciaController::class, 'update'])->name('asistencias.update')->middleware('permission:ModificarAsistencia');
+        Route::get('/', [Academia\AsistenciaController::class, 'index'])->name('asistencias.index')->middleware(Permisos::lectura(['Asistencia', 'TomaAsistencia']));
+        Route::post('/', [Academia\AsistenciaController::class, 'store'])->name('asistencias.store')->middleware('permission:CrearAsistencia|CrearTomaAsistencia');
+        Route::get('/preparar', [Academia\AsistenciaController::class, 'preparar'])->name('asistencias.preparar')->middleware(Permisos::lectura(['Asistencia', 'TomaAsistencia']));
+        Route::get('/{id}', [Academia\AsistenciaController::class, 'show'])->name('asistencias.show')->middleware(Permisos::lectura(['Asistencia', 'TomaAsistencia']));
+        Route::put('/{id}', [Academia\AsistenciaController::class, 'update'])->name('asistencias.update')->middleware('permission:ModificarAsistencia|ModificarTomaAsistencia');
         Route::delete('/{id}', [Academia\AsistenciaController::class, 'destroy'])->name('asistencias.delete')->middleware('permission:EliminarAsistencia');
     });
 
     // Dashboard de academia
-    Route::get('academia/dashboard', [Academia\DashboardController::class, 'index'])->name('academia.dashboard');
+    Route::get('academia/dashboard', [Academia\DashboardController::class, 'index'])->name('academia.dashboard')->middleware('permission:ListarDashboardAcademia');
 });

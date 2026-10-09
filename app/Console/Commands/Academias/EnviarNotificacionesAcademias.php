@@ -16,7 +16,7 @@ class EnviarNotificacionesAcademias extends Command
         {--fecha= : Simula que hoy es esta fecha (Y-m-d)}
         {--simular : Solo cuenta lo que haría; no cobra ni envía correos}';
 
-    protected $description = 'Causa mensualidades y envía recordatorios de pago y avisos de mora de cada academia';
+    protected $description = 'Causa los ciclos de clases y envía recordatorios de pago y avisos de mora de cada academia';
 
     public function handle(): int
     {

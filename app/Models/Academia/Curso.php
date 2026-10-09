@@ -3,6 +3,7 @@
 namespace App\Models\Academia;
 
 use Exception;
+use DomainException;
 use Carbon\Carbon;
 use App\Enum\AccionAuditoriaEnum;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +28,7 @@ class Curso extends Model
         'ritmo_id',
         'profesor_id',
         'plan_id',
+        'en_pareja',
         'dia',
         'hora',
         'fecha_inicio',
@@ -72,6 +74,7 @@ class Curso extends Model
                 DB::raw("CONCAT(COALESCE(profesores.nombres,''),' ',COALESCE(profesores.apellidos,'')) as profesor_nombre"),
                 'cursos.plan_id',
                 'planes.nombre as plan_nombre',
+                'cursos.en_pareja',
                 'cursos.dia',
                 'cursos.hora',
                 'cursos.fecha_inicio',
@@ -146,11 +149,15 @@ class Curso extends Model
             ->join('alumnos', 'alumnos.id', '=', 'curso_alumno.alumno_id')
             ->where('curso_alumno.curso_id', $id)
             ->where('curso_alumno.estado', 1)
+            ->leftJoin('alumnos as pareja', 'pareja.id', '=', 'curso_alumno.pareja_alumno_id')
             ->select(
                 'alumnos.id',
                 DB::raw("CONCAT(alumnos.nombres,' ',alumnos.apellidos) as nombre"),
                 'curso_alumno.saldo',
                 'curso_alumno.ultima_fecha_pago',
+                'curso_alumno.modalidad',
+                'curso_alumno.pareja_alumno_id',
+                DB::raw("CONCAT(pareja.nombres,' ',pareja.apellidos) as pareja_nombre"),
             )
             ->orderBy('alumnos.nombres')
             ->get();
@@ -162,6 +169,7 @@ class Curso extends Model
             'ritmo_id' => $curso->ritmo_id,
             'profesor_id' => $curso->profesor_id,
             'plan_id' => $curso->plan_id,
+            'en_pareja' => $curso->en_pareja,
             'dia' => $curso->dia,
             'hora' => $curso->hora ? substr($curso->hora, 0, 5) : null,
             'fecha_inicio' => $curso->fecha_inicio,
@@ -193,10 +201,14 @@ class Curso extends Model
 
         $curso = isset($dto['id']) ? Curso::find($dto['id']) : new Curso();
         $original = $curso->toJson();
+        $estabaInactivo = $curso->exists && !($curso->estado && $curso->activo);
 
         $curso->fill($dto);
         if (!$curso->save()) {
             throw new Exception('Ocurrió un error al intentar guardar el curso.');
+        }
+        if ($estabaInactivo && $curso->estado && $curso->activo) {
+            Curso::reanudarCiclos($curso);
         }
 
         // Sincroniza la matrícula de alumnos si viene la lista.
@@ -218,7 +230,7 @@ class Curso extends Model
 
     /**
      * Matricula/retira alumnos del curso. A los nuevos (por ciclo) les asigna como saldo el
-     * precio de su primer ciclo (Tarifas: plan, 2.º/3.º curso, pareja); por paquete, 0.
+     * precio de su primer ciclo (Tarifas: escala individual o de pareja del curso); por paquete, 0.
      */
     private static function sincronizarMatricula($curso, array $alumnosIds)
     {
@@ -234,25 +246,7 @@ class Curso extends Model
         $primeraClase = (new CalendarioCurso())->primeraClase($curso, Carbon::today())->toDateString();
 
         foreach ($porAgregar as $alumnoId) {
-            // Con paquete vigente asiste descontando clases; si no, paga por ciclos de clases.
-            $porPaquete = (bool) Paquetes::vigente((int) $alumnoId, Carbon::today());
-            $cursoAlumnoId = DB::table('curso_alumno')->insertGetId([
-                'curso_id' => $curso->id,
-                'alumno_id' => $alumnoId,
-                'fecha_matricula' => Carbon::now()->toDateString(),
-                'ciclo_inicio' => $porPaquete ? null : $primeraClase,
-                'modalidad' => $porPaquete ? 'paquete' : 'ciclo',
-                'saldo' => 0,
-                'estado' => 1,
-                'created_at' => Carbon::now(),
-                'updated_at' => Carbon::now(),
-            ]);
-            // El primer ciclo se cobra con su precio según el orden de matrícula (2.º, 3.º curso…).
-            if (!$porPaquete) {
-                DB::table('curso_alumno')->where('id', $cursoAlumnoId)
-                    ->update(['saldo' => Tarifas::precio($cursoAlumnoId)['valor']]);
-            }
-            NotificadorAcademia::bienvenida($cursoAlumnoId);
+            Curso::matricular($curso, (int) $alumnoId, $primeraClase);
         }
 
         if (count($porQuitar) > 0) {
@@ -260,11 +254,139 @@ class Curso extends Model
                 ->where('curso_id', $curso->id)
                 ->whereIn('alumno_id', $porQuitar)
                 ->delete();
-            // Quien quede sin su pareja en el curso deja de tener precio de pareja.
+            // Quien pagaba en pareja con un retirado vuelve a pagar individual.
             DB::table('curso_alumno')
                 ->where('curso_id', $curso->id)
                 ->whereIn('pareja_alumno_id', $porQuitar)
                 ->update(['pareja_alumno_id' => null, 'updated_at' => Carbon::now()]);
+        }
+    }
+
+    /**
+     * Al reactivar un curso no se cobran los ciclos del tiempo en que estuvo inactivo (mientras lo
+     * está, el notificador no causa ciclos). Las matrículas cuyo ciclo ya terminó empiezan uno
+     * nuevo en la próxima clase y se les cobra solo ese; las que siguen dentro de su ciclo no cambian.
+     */
+    private static function reanudarCiclos($curso): void
+    {
+        $plan = $curso->plan_id ? DB::table('planes')->where('id', $curso->plan_id)->first() : null;
+        if (!$plan || $plan->periodicidad !== 'mensual' || (float) $plan->valor <= 0) {
+            return;
+        }
+        $calendario = new CalendarioCurso();
+        $hoy = Carbon::today();
+        $proximaClase = $calendario->primeraClase($curso, $hoy)->toDateString();
+        $matriculas = DB::table('curso_alumno')->where('curso_id', $curso->id)->where('estado', 1)->where('modalidad', 'ciclo')->get();
+
+        foreach ($matriculas as $m) {
+            $ciclo = $calendario->ciclo($curso, $m, CalendarioCurso::clasesPorCiclo($plan->num_clases));
+            if ($hoy->lt($ciclo['proximo_pago'])) {
+                continue;
+            }
+            $precio = Tarifas::precio($m->id);
+            DB::table('cargos_mensuales')->insertOrIgnore([
+                'curso_alumno_id' => $m->id, 'periodo' => $proximaClase, 'valor' => $precio['valor'],
+                'valor_base' => $precio['base'], 'regla' => $precio['regla'],
+                'created_at' => Carbon::now(), 'updated_at' => Carbon::now(),
+            ]);
+            DB::table('curso_alumno')->where('id', $m->id)->update([
+                'ciclo_inicio' => $proximaClase,
+                'saldo' => (float) $m->saldo + $precio['valor'],
+                'updated_at' => Carbon::now(),
+            ]);
+        }
+    }
+
+    /**
+     * Matricula a un alumno en el curso y devuelve el id de la matrícula (curso_alumno).
+     * $primeraClase: 1.ª clase del primer ciclo (por defecto, la próxima del curso).
+     * $notificar = false cuando quien llama envía su propio correo (matrícula rápida).
+     * $parejaId: alumno ya matriculado en el curso con quien paga en pareja (ver emparejar).
+     */
+    public static function matricular($curso, int $alumnoId, ?string $primeraClase = null, bool $notificar = true,
+        ?int $parejaId = null, bool $ajustarCicloPareja = false): int
+    {
+        $primeraClase ??= (new CalendarioCurso())->primeraClase($curso, Carbon::today())->toDateString();
+        // Con paquete vigente asiste descontando clases; si no, paga por ciclos de clases.
+        $porPaquete = (bool) Paquetes::vigente($alumnoId, Carbon::today());
+        $cursoAlumnoId = DB::table('curso_alumno')->insertGetId([
+            'curso_id' => $curso->id,
+            'alumno_id' => $alumnoId,
+            'fecha_matricula' => Carbon::now()->toDateString(),
+            'ciclo_inicio' => $porPaquete ? null : $primeraClase,
+            'modalidad' => $porPaquete ? 'paquete' : 'ciclo',
+            'saldo' => 0,
+            'estado' => 1,
+            'created_at' => Carbon::now(),
+            'updated_at' => Carbon::now(),
+        ]);
+        // La pareja se enlaza antes de cobrar, para que el primer ciclo salga ya con precio de pareja.
+        if ($parejaId) {
+            self::emparejar((int) $curso->id, $alumnoId, $parejaId, $ajustarCicloPareja);
+        }
+        // El primer ciclo se cobra con su precio según el orden de matrícula (2.º, 3.º curso…).
+        if (!$porPaquete) {
+            DB::table('curso_alumno')->where('id', $cursoAlumnoId)
+                ->update(['saldo' => Tarifas::precio($cursoAlumnoId)['valor']]);
+        }
+        if ($notificar) {
+            NotificadorAcademia::bienvenida($cursoAlumnoId);
+        }
+        return $cursoAlumnoId;
+    }
+
+    /**
+     * Define con quién paga en pareja un alumno este curso ($parejaId null = paga individual).
+     * El enlace se guarda en las dos matrículas; si alguno ya tenía otra pareja, esa queda individual.
+     *
+     * El precio nuevo aplica desde el siguiente ciclo de cada uno. Con $ajustarCiclo también se corrige
+     * el ciclo en curso: al saldo de cada afectado se le suma la diferencia entre el precio nuevo y el anterior.
+     */
+    public static function emparejar(int $cursoId, int $alumnoId, ?int $parejaId, bool $ajustarCiclo = false): void
+    {
+        $matricula = fn (int $id) => DB::table('curso_alumno')
+            ->where('curso_id', $cursoId)->where('alumno_id', $id)->where('estado', 1)->first();
+
+        $propia = $matricula($alumnoId);
+        if (!$propia) {
+            throw new DomainException('El alumno no está matriculado en este curso.');
+        }
+        $otra = null;
+        if ($parejaId) {
+            if ($parejaId === $alumnoId) {
+                throw new DomainException('Un alumno no puede ser su propia pareja.');
+            }
+            $otra = $matricula($parejaId);
+            if (!$otra) {
+                throw new DomainException('La pareja debe estar matriculada en este mismo curso.');
+            }
+        }
+
+        // Cambian de precio: los dos y las parejas que tuvieran antes.
+        $afectados = array_values(array_unique(array_filter([
+            $alumnoId, $parejaId, $propia->pareja_alumno_id, $otra->pareja_alumno_id ?? null,
+        ])));
+        $filas = DB::table('curso_alumno')->where('curso_id', $cursoId)->whereIn('alumno_id', $afectados)->get();
+        $antes = $filas->mapWithKeys(fn ($m) => [$m->id => Tarifas::precio($m->id)['valor']]);
+
+        $enlazar = fn (int $de, ?int $con) => DB::table('curso_alumno')
+            ->where('curso_id', $cursoId)->where('alumno_id', $de)
+            ->update(['pareja_alumno_id' => $con, 'updated_at' => Carbon::now()]);
+        foreach ($afectados as $id) {
+            $enlazar((int) $id, null);
+        }
+        if ($parejaId) {
+            $enlazar($alumnoId, $parejaId);
+            $enlazar($parejaId, $alumnoId);
+        }
+
+        if ($ajustarCiclo) {
+            foreach ($filas->where('modalidad', 'ciclo') as $m) {
+                $delta = Tarifas::precio($m->id)['valor'] - $antes[$m->id];
+                if (abs($delta) > 0.001) {
+                    DB::table('curso_alumno')->where('id', $m->id)->update(['saldo' => DB::raw('saldo + ' . (float) $delta)]);
+                }
+            }
         }
     }
 
@@ -285,7 +407,7 @@ class Curso extends Model
         }
         DB::table('curso_alumno')->where('id', $matricula->id)->update($datos);
         if ($modalidad === 'ciclo') {
-            // Primer ciclo con su precio (posición entre los cursos del alumno, pareja).
+            // Primer ciclo con su precio (posición entre los cursos del alumno).
             DB::table('curso_alumno')->where('id', $matricula->id)->update([
                 'saldo' => (float) $matricula->saldo + Tarifas::precio($matricula->id)['valor'],
             ]);

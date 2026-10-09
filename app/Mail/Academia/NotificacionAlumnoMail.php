@@ -5,6 +5,7 @@ namespace App\Mail\Academia;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Queue\SerializesModels;
+use App\Support\Academias\Apariencia;
 use App\Support\Configuracion\Configuracion;
 
 /**
@@ -28,6 +29,7 @@ class NotificacionAlumnoMail extends Mailable
     public const CLASE_PRIVADA = 'clase_privada';
     public const PAGO = 'pago';
     public const CUMPLEANOS = 'cumpleanos';
+    public const MATRICULA = 'matricula';
 
     private const PLANTILLAS = [
         self::ALUMNO_NUEVO => 'ALUMNO_BIENVENIDA',
@@ -39,6 +41,7 @@ class NotificacionAlumnoMail extends Mailable
         self::CLASE_PRIVADA => 'CLASE_PRIVADA_RECORDATORIO',
         self::PAGO => 'PAGO_CONFIRMACION',
         self::CUMPLEANOS => 'CUMPLEANOS',
+        self::MATRICULA => 'MATRICULA_RESUMEN',
     ];
 
     private const ASUNTOS = [
@@ -51,10 +54,14 @@ class NotificacionAlumnoMail extends Mailable
         self::CLASE_PRIVADA => 'Recordatorio: tu clase personalizada es mañana',
         self::PAGO => 'Recibimos tu pago',
         self::CUMPLEANOS => '¡Feliz cumpleaños!',
+        self::MATRICULA => 'Tu matrícula en :academia',
     ];
 
     /** Plantilla ya armada (asunto y cuerpo HTML), o null para usar la vista por defecto. */
     public ?array $plantilla;
+
+    /** Colores y logo de la academia (Apariencia), tomados al construir el correo igual que la plantilla. */
+    public array $marca;
 
     /**
      * @param string $tipo  bienvenida | recordatorio | mora | paquete_vence | paquete_ultima
@@ -64,6 +71,7 @@ class NotificacionAlumnoMail extends Mailable
     public function __construct(public string $tipo, public array $academia, public array $datos)
     {
         $this->plantilla = Configuracion::plantilla(self::PLANTILLAS[$tipo], self::variables($academia, $datos));
+        $this->marca = Apariencia::paraCorreo();
     }
 
     /** Variables disponibles en las plantillas (montos ya formateados). */

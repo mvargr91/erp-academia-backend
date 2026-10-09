@@ -1,4 +1,4 @@
-@extends('emails.academia.layout', ['color' => '#2E75B6'])
+@extends('emails.academia.layout')
 
 @section('contenido')
     <p>¡Te damos la bienvenida a <strong>{{ $academia['nombre'] }}</strong>! Ya quedaste registrado(a) como alumno(a).</p>

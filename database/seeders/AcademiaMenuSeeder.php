@@ -22,28 +22,42 @@ class AcademiaMenuSeeder extends Seeder
 
     private const PERMISOS = ['Crear', 'Modificar', 'Eliminar', 'Listar'];
 
-    // modulo => [icono, posicion, opciones[nombre, url, icono, entidad del permiso]]
+    // modulo => [icono, posicion, opciones[nombre, url, icono, entidad del permiso, permisos propios (opcional)]]
+    //
+    // Los permisos propios se suman a los cuatro de siempre, uno por cada acción de la opción que no es
+    // crear/modificar/eliminar/listar: p. ej. Pagar → PagarPaquete. Escritos como 'Titulo' => 'Padre',
+    // al crearse por primera vez se conceden a los roles que ya tenían el permiso padre de esa opción
+    // (así quien ya hacía esa acción con «Modificar» o «Listar» no la pierde); después se administran
+    // por rol como cualquier otro.
     private const MENU = [
         'Academia' => ['school', 5, [
             ['Panel Academia', '/dashboard-academia', 'dashboard', 'DashboardAcademia'],
-            ['Alumnos', '/alumnos', 'groups', 'Alumno'],
-            ['Profesores', '/profesores', 'person', 'Profesor'],
-            ['Cursos', '/cursos', 'event', 'Curso'],
-            ['Asistencia', '/asistencias', 'fact_check', 'Asistencia'],
-            ['Clases personalizadas', '/clases-privadas', 'person_pin', 'ClasePrivada'],
-            ['Paquetes de clases', '/paquetes', 'card_membership', 'Paquete'],
-            ['Envíos de correo', '/envios-correo', 'campaign', 'EnvioCorreo'],
-            ['Pagos', '/pagos', 'payments', 'Pago'],
+            ['Alumnos', '/alumnos', 'groups', 'Alumno', ['EstadoCuenta' => 'Listar', 'Exportar' => 'Listar']],
+            ['Matrícula rápida', '/matriculas', 'how_to_reg', 'Matricula'],
+            ['Profesores', '/profesores', 'person', 'Profesor', ['Exportar' => 'Listar']],
+            ['Cursos', '/cursos', 'event', 'Curso', ['FormaDePago' => 'Modificar', 'Exportar' => 'Listar']],
+            ['Tomar asistencia', '/tomar-asistencia', 'checklist', 'TomaAsistencia'],
+            ['Asistencia', '/asistencias', 'fact_check', 'Asistencia', ['Exportar' => 'Listar']],
+            ['Clases personalizadas', '/clases-privadas', 'person_pin', 'ClasePrivada', ['Pagar', 'RegistrarAsistencia' => 'Modificar', 'Exportar' => 'Listar']],
+            ['Paquetes de clases', '/paquetes', 'card_membership', 'Paquete', ['Pagar', 'RegistrarClases' => 'Modificar', 'Exportar' => 'Listar']],
+            ['Envíos de correo', '/envios-correo', 'campaign', 'EnvioCorreo', ['Exportar' => 'Listar']],
+            ['Pagos', '/pagos', 'payments', 'Pago', ['Exportar' => 'Listar']],
         ]],
         'Configuración Academia' => ['settings', 6, [
-            ['Sedes', '/sedes', 'store', 'Sede'],
-            ['Ritmos', '/ritmos', 'music_note', 'Ritmo'],
-            ['Planes', '/planes', 'sell', 'Plan'],
-            ['Cierres de la academia', '/cierres', 'event_busy', 'Cierre'],
-            ['Parámetros', '/parametros', 'tune', 'ParametroSistema'],
-            ['Plantillas de correo', '/plantillas-correo', 'mail', 'PlantillaCorreo'],
+            ['Sedes', '/sedes', 'store', 'Sede', ['Exportar' => 'Listar']],
+            ['Ritmos', '/ritmos', 'music_note', 'Ritmo', ['Exportar' => 'Listar']],
+            ['Planes', '/planes', 'sell', 'Plan', ['Exportar' => 'Listar']],
+            ['Tarifas', '/tarifas', 'price_change', 'Tarifa'],
+            ['Cierres de la academia', '/cierres', 'event_busy', 'Cierre', ['Exportar' => 'Listar']],
+            ['Parámetros', '/parametros', 'tune', 'ParametroSistema', ['Exportar' => 'Listar']],
+            ['Plantillas de correo', '/plantillas-correo', 'mail', 'PlantillaCorreo', ['Exportar' => 'Listar']],
             ['Apariencia', '/apariencia', 'palette', 'Apariencia'],
         ]],
+    ];
+
+    // Permisos propios de opciones que no siembra este menú (las de Seguridad): url => [entidad, permisos propios].
+    private const OTRAS_OPCIONES = [
+        '/usuarios' => ['Usuario', ['CambiarClave' => 'Modificar']],
     ];
 
     /** Menú a registrar; las subclases lo reemplazan para sembrar otros módulos. */
@@ -80,7 +94,8 @@ class AcademiaMenuSeeder extends Seeder
                     ->where('aplicacion_id', $aplicacionId)
                     ->value('id');
 
-                foreach ($opciones as $posicion => [$nombreOpcion, $url, $iconoOpcion, $entidad]) {
+                foreach ($opciones as $posicion => $opcion) {
+                    [$nombreOpcion, $url, $iconoOpcion, $entidad] = $opcion;
                     DB::table('opciones_del_sistema')->updateOrInsert(
                         ['url' => $url],
                         array_merge($auditoria, [
@@ -96,34 +111,61 @@ class AcademiaMenuSeeder extends Seeder
                     $opcionId = DB::table('opciones_del_sistema')->where('url', $url)->value('id');
 
                     foreach (self::PERMISOS as $titulo) {
-                        $nombrePermiso = $titulo . $entidad;
-                        DB::table('permissions')->updateOrInsert(
-                            ['name' => $nombrePermiso, 'guard_name' => 'api'],
-                            [
-                                'option_id' => $opcionId,
-                                'title' => $titulo,
-                                'user_creation_id' => 1,
-                                'user_creation_name' => 'SuperUser',
-                                'user_modification_id' => 1,
-                                'user_modification_name' => 'SuperUser',
-                                'created_at' => $ahora,
-                                'updated_at' => $ahora,
-                            ]
-                        );
-                        $permisoId = DB::table('permissions')
-                            ->where('name', $nombrePermiso)
-                            ->where('guard_name', 'api')
-                            ->value('id');
-
-                        DB::table('role_has_permissions')->insertOrIgnore([
-                            'permission_id' => $permisoId,
-                            'role_id' => self::ROL_ADMINISTRADOR_ID,
-                        ]);
+                        $this->registrarPermiso($opcionId, $entidad, $titulo, null, $ahora);
                     }
+                    $this->registrarPropios($opcionId, $entidad, $opcion[4] ?? [], $ahora);
+                }
+            }
+
+            foreach (self::OTRAS_OPCIONES as $url => [$entidad, $propios]) {
+                if ($opcionId = DB::table('opciones_del_sistema')->where('url', $url)->value('id')) {
+                    $this->registrarPropios($opcionId, $entidad, $propios, $ahora);
                 }
             }
         });
 
         GestorAcademias::olvidarCachePermisos();
+    }
+
+    /** @param array $propios  ['Titulo'] o ['Titulo' => 'Padre'] */
+    private function registrarPropios(int $opcionId, string $entidad, array $propios, Carbon $ahora): void
+    {
+        foreach ($propios as $clave => $valor) {
+            [$titulo, $padre] = is_int($clave) ? [$valor, null] : [$clave, $valor];
+            $this->registrarPermiso($opcionId, $entidad, $titulo, $padre, $ahora);
+        }
+    }
+
+    /**
+     * Crea (o actualiza) el permiso {Titulo}{Entidad} de la opción y lo concede al administrador.
+     * Si es nuevo y tiene padre, también a los roles que ya tenían {Padre}{Entidad}.
+     */
+    private function registrarPermiso(int $opcionId, string $entidad, string $titulo, ?string $padre, Carbon $ahora): void
+    {
+        $nombre = $titulo . $entidad;
+        $llave = ['name' => $nombre, 'guard_name' => 'api'];
+        $esNuevo = !DB::table('permissions')->where($llave)->exists();
+        DB::table('permissions')->updateOrInsert($llave, [
+            'option_id' => $opcionId,
+            'title' => $titulo,
+            'user_creation_id' => 1,
+            'user_creation_name' => 'SuperUser',
+            'user_modification_id' => 1,
+            'user_modification_name' => 'SuperUser',
+            'created_at' => $ahora,
+            'updated_at' => $ahora,
+        ]);
+        $permisoId = DB::table('permissions')->where($llave)->value('id');
+
+        $roles = [self::ROL_ADMINISTRADOR_ID];
+        if ($esNuevo && $padre) {
+            $roles = array_merge($roles, DB::table('role_has_permissions as rp')
+                ->join('permissions as p', 'p.id', '=', 'rp.permission_id')
+                ->where('p.name', $padre . $entidad)->where('p.guard_name', 'api')
+                ->pluck('rp.role_id')->all());
+        }
+        foreach (array_unique($roles) as $rolId) {
+            DB::table('role_has_permissions')->insertOrIgnore(['permission_id' => $permisoId, 'role_id' => $rolId]);
+        }
     }
 }

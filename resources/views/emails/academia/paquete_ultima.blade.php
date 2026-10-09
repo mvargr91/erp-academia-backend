@@ -1,4 +1,4 @@
-@extends('emails.academia.layout', ['color' => '#1A73E8'])
+@extends('emails.academia.layout')
 
 @section('contenido')
     <p>Te queda <strong>1 clase</strong> de tu paquete <strong>{{ $datos['curso'] }}</strong>

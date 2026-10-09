@@ -47,6 +47,38 @@ class Apariencia
         return $datos;
     }
 
+    /**
+     * Marca de la academia para sus correos: los mismos colores y logo de Configuración → Apariencia.
+     *
+     * La cabecera del correo usa el color del menú con el logo para fondos oscuros; si la academia solo
+     * subió el logo normal (pensado para fondo claro), la cabecera va en blanco con una franja del color
+     * primario; sin logo, muestra el nombre sobre el color del menú.
+     *
+     * `logo_ruta` es el archivo en disco (para incrustarlo en el correo y que se vea aunque el cliente
+     * de correo no pueda descargar imágenes del servidor); `logo_url`, su dirección pública.
+     */
+    public static function paraCorreo(?Academia $academia = null): array
+    {
+        $academia ??= GestorAcademias::actual();
+        $guardada = $academia?->apariencia ?? [];
+        $color = fn (string $campo) => $guardada[$campo] ?? self::DEFECTO[$campo];
+
+        $campoLogo = !empty($guardada['logo_oscuro']) ? 'logo_oscuro' : (!empty($guardada['logo']) ? 'logo' : null);
+        $ruta = $campoLogo ? Storage::disk('public')->path(self::carpeta($academia->codigo) . '/' . $guardada[$campoLogo]) : null;
+        $hayLogo = $ruta && is_file($ruta);
+        $cabeceraClara = $hayLogo && $campoLogo === 'logo';
+
+        return [
+            'color_primario' => $color('color_primario'),
+            'color_acento' => $color('color_acento'),
+            'color_cabecera' => $cabeceraClara ? '#FFFFFF' : $color('color_menu'),
+            'color_texto_cabecera' => $cabeceraClara ? $color('color_menu') : '#FFFFFF',
+            'cabecera_clara' => $cabeceraClara,
+            'logo_ruta' => $hayLogo ? $ruta : null,
+            'logo_url' => $hayLogo ? self::url($academia, $guardada[$campoLogo]) : null,
+        ];
+    }
+
     public static function url(Academia $academia, string $archivo): string
     {
         return rtrim(config('app.url'), '/') . '/marca/' . $academia->codigo . '/' . $archivo;

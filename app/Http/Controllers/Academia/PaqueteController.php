@@ -2,12 +2,16 @@
 
 namespace App\Http\Controllers\Academia;
 
+use Exception;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use App\Services\Academia\ClasesPrivadas;
+use App\Services\Academia\CalendarioCurso;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\Controller;
+use App\Models\Academia\Pago;
 use App\Models\Academia\Sede;
 use App\Services\Academia\Paquetes;
 use Illuminate\Support\Facades\Validator;
@@ -91,19 +95,171 @@ class PaqueteController extends Controller
         if (!$paquete) {
             return response(get_response_body(['El paquete no existe.']), Response::HTTP_NOT_FOUND);
         }
+        return response($this->detalle($paquete), Response::HTTP_OK);
+    }
+
+    private function detalle(object $paquete): array
+    {
         $datos = $this->formatear($paquete);
-        $datos['consumos'] = DB::table('consumos_paquete as c')
+        $datos['clases'] = $this->clasesDe($paquete);
+        $datos['horas_cancelacion'] = ClasesPrivadas::horasCancelacion();
+        $datos['pagos'] = DB::table('pagos')->where('paquete_id', $paquete->id)->orderBy('fecha_pago')
+            ->get(['id', 'monto', 'fecha_pago', 'metodo_pago', 'referencia']);
+        return $datos;
+    }
+
+    /**
+     * Clases del paquete, para la planilla "una fila por clase": las que ya descontaron (grupales o
+     * personalizadas) y las personalizadas registradas aquí que no descuentan (programadas o canceladas
+     * a tiempo). `editable` = se registró desde el paquete y se puede corregir en la planilla.
+     */
+    private function clasesDe(object $paquete)
+    {
+        $consumos = DB::table('consumos_paquete as c')
             ->leftJoin('asistencias as s', 's.id', '=', 'c.asistencia_id')
             ->leftJoin('cursos as cu', 'cu.id', '=', 's.curso_id')
             ->leftJoin('ritmos as r', 'r.id', '=', 'cu.ritmo_id')
-            ->where('c.paquete_id', $id)
-            ->orderBy('c.fecha')
-            ->select('c.id', 'c.fecha', 'c.origen', 'c.motivo', 'c.clase_privada_id',
+            ->leftJoin('clases_privadas as cp', 'cp.id', '=', 'c.clase_privada_id')
+            ->leftJoin('clase_privada_alumno as cpa', fn ($j) => $j->on('cpa.clase_privada_id', '=', 'c.clase_privada_id')
+                ->on('cpa.alumno_id', '=', 'c.alumno_id'))
+            ->leftJoin('profesores as p', 'p.id', '=', 'cp.profesor_id')
+            ->where('c.paquete_id', $paquete->id)
+            ->select('c.fecha', 'c.origen', 'c.motivo', 'c.clase_privada_id', 'cp.hora', 'cp.duracion_min', 'cp.profesor_id',
+                'cp.observacion', 'cpa.paquete_id as registrada_en', DB::raw("CONCAT(p.nombres,' ',p.apellidos) as profesor_nombre"),
                 DB::raw("COALESCE(cu.nombre, r.nombre) as curso"))
-            ->get();
-        $datos['pagos'] = DB::table('pagos')->where('paquete_id', $id)->orderBy('fecha_pago')
-            ->get(['id', 'monto', 'fecha_pago', 'metodo_pago']);
-        return response($datos, Response::HTTP_OK);
+            ->get()
+            ->map(fn ($c) => [
+                'clase_id' => $c->clase_privada_id,
+                'origen' => $c->origen,
+                'fecha' => $c->fecha,
+                'hora' => $c->hora ? substr((string) $c->hora, 0, 5) : null,
+                'duracion_min' => $c->duracion_min,
+                'profesor_id' => $c->profesor_id,
+                'profesor_nombre' => $c->profesor_nombre,
+                'curso' => $c->curso,
+                'observacion' => $c->observacion,
+                'resultado' => $c->motivo === 'cancelacion_tardia' ? 'cancelo_tarde' : $c->motivo,
+                'descuenta' => true,
+                'editable' => (int) $c->registrada_en === (int) $paquete->id,
+            ]);
+
+        $sinDescontar = DB::table('clase_privada_alumno as cpa')
+            ->join('clases_privadas as cp', 'cp.id', '=', 'cpa.clase_privada_id')
+            ->leftJoin('profesores as p', 'p.id', '=', 'cp.profesor_id')
+            ->where('cpa.paquete_id', $paquete->id)
+            ->where('cpa.descuenta', false)
+            ->select('cp.*', 'cpa.resultado', DB::raw("CONCAT(p.nombres,' ',p.apellidos) as profesor_nombre"))
+            ->get()
+            ->map(fn ($c) => [
+                'clase_id' => $c->id,
+                'origen' => 'privada',
+                'fecha' => $c->fecha,
+                'hora' => substr((string) $c->hora, 0, 5),
+                'duracion_min' => $c->duracion_min,
+                'profesor_id' => $c->profesor_id,
+                'profesor_nombre' => $c->profesor_nombre,
+                'curso' => null,
+                'observacion' => $c->observacion,
+                'resultado' => $c->resultado === 'cancelo' ? 'cancelo_a_tiempo' : 'pendiente',
+                'descuenta' => false,
+                'editable' => true,
+            ]);
+
+        return $consumos->concat($sinDescontar)->sortBy(fn ($c) => $c['fecha'] . ' ' . ($c['hora'] ?? ''))->values();
+    }
+
+    /**
+     * Registra (o corrige) una clase personalizada del paquete desde su planilla.
+     * resultado: pendiente (programada) | asistio | no_asistio | cancelo_a_tiempo | cancelo_tarde.
+     */
+    public function guardarClase(Request $request, $id, $claseId = null)
+    {
+        $paquete = $this->consulta()->where('pa.id', $id)->first();
+        if (!$paquete) {
+            return response(get_response_body(['El paquete no existe.']), Response::HTTP_NOT_FOUND);
+        }
+        $validator = Validator::make($request->all(), [
+            'fecha' => 'required|date',
+            'hora' => 'required|date_format:H:i',
+            'duracion_min' => 'nullable|integer|between:15,300',
+            'profesor_id' => 'nullable|integer|exists:profesores,id',
+            'resultado' => 'required|in:pendiente,asistio,no_asistio,cancelo_a_tiempo,cancelo_tarde',
+            'observacion' => 'nullable|string',
+        ], ['fecha.required' => 'Indica la fecha de la clase.', 'hora.required' => 'Indica la hora de la clase.']);
+        if ($validator->fails()) {
+            return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+        }
+        $fila = $claseId ? DB::table('clase_privada_alumno')->where('clase_privada_id', $claseId)->where('paquete_id', $id)->first() : null;
+        if ($claseId && !$fila) {
+            return response(get_response_body(['Esa clase no se registró desde este paquete.']), Response::HTTP_NOT_FOUND);
+        }
+        $fecha = Carbon::parse($request->fecha);
+        $sedeId = $paquete->sede_id ?: Sede::porDefecto();
+        if ($noLectivo = (new CalendarioCurso())->noLectivo($fecha, (int) $sedeId)) {
+            $tipo = $noLectivo['tipo'] === 'festivo' ? 'es festivo' : 'la academia está cerrada';
+            return response(get_response_body([$fecha->format('d/m/Y') . " {$tipo} ({$noLectivo['motivo']})."]), Response::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            DB::transaction(function () use ($request, $paquete, $claseId, $fila, $fecha, $sedeId) {
+                $usuario = Auth::user()->usuario();
+                $datos = [
+                    'fecha' => $fecha->toDateString(),
+                    'hora' => $request->hora,
+                    'duracion_min' => $request->duracion_min ?: 60,
+                    'profesor_id' => $request->profesor_id,
+                    'observacion' => $request->observacion,
+                    'usuario_modificacion_id' => $usuario->id,
+                    'usuario_modificacion_nombre' => $usuario->nombre,
+                    'updated_at' => Carbon::now(),
+                ];
+                if ($claseId) {
+                    DB::table('clases_privadas')->where('id', $claseId)->update($datos);
+                } else {
+                    $claseId = DB::table('clases_privadas')->insertGetId(array_merge($datos, [
+                        'sede_id' => $sedeId,
+                        'estado' => 'programada',
+                        'usuario_creacion_id' => $usuario->id,
+                        'usuario_creacion_nombre' => $usuario->nombre,
+                        'created_at' => Carbon::now(),
+                    ]));
+                    $filaId = DB::table('clase_privada_alumno')->insertGetId([
+                        'clase_privada_id' => $claseId, 'alumno_id' => $paquete->alumno_id, 'paquete_id' => $paquete->id,
+                        'resultado' => 'pendiente', 'created_at' => Carbon::now(), 'updated_at' => Carbon::now(),
+                    ]);
+                    $fila = DB::table('clase_privada_alumno')->find($filaId);
+                }
+
+                $cancelo = str_starts_with($request->resultado, 'cancelo');
+                $descontada = ClasesPrivadas::aplicarResultado(
+                    DB::table('clases_privadas')->find($claseId),
+                    $fila,
+                    $cancelo ? 'cancelo' : $request->resultado,
+                    $cancelo ? $request->resultado === 'cancelo_a_tiempo' : null,
+                );
+                if (!$descontada) {
+                    throw new Exception('El paquete no tiene clases disponibles para esa fecha (está agotado, vencido o anulado).');
+                }
+                ClasesPrivadas::actualizarEstado((int) $claseId);
+            });
+        } catch (Exception $e) {
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_CONFLICT);
+        }
+
+        return response(get_response_body(['La clase ha sido registrada.', 1],
+            $this->detalle($this->consulta()->where('pa.id', $id)->first())), Response::HTTP_OK);
+    }
+
+    /** Quita una clase registrada desde el paquete; si había descontado, la clase vuelve al paquete. */
+    public function eliminarClase($id, $claseId)
+    {
+        $paquete = $this->consulta()->where('pa.id', $id)->first();
+        $esDelPaquete = DB::table('clase_privada_alumno')->where('clase_privada_id', $claseId)->where('paquete_id', $id)->exists();
+        if (!$paquete || !$esDelPaquete) {
+            return response(get_response_body(['Esa clase no se registró desde este paquete.']), Response::HTTP_NOT_FOUND);
+        }
+        DB::table('clases_privadas')->where('id', $claseId)->delete();
+        return response(get_response_body(['La clase ha sido quitada del paquete.', 3], $this->detalle($paquete)), Response::HTTP_OK);
     }
 
     public function store(Request $request)
@@ -141,7 +297,7 @@ class PaqueteController extends Controller
             'created_at' => Carbon::now(),
             'updated_at' => Carbon::now(),
         ]);
-        return response(get_response_body(['El paquete ha sido registrado. Registra su pago en Pagos eligiendo este paquete.', 2],
+        return response(get_response_body(['El paquete ha sido registrado. Su pago se registra con «Registrar pago» en la lista de paquetes.', 2],
             $this->formatear($this->consulta()->where('pa.id', $id)->first())), Response::HTTP_CREATED);
     }
 
@@ -171,6 +327,63 @@ class PaqueteController extends Controller
         ]);
         return response(get_response_body(['El paquete ha sido modificado.', 1],
             $this->formatear($this->consulta()->where('pa.id', $id)->first())), Response::HTTP_OK);
+    }
+
+    /** Registra un pago (total o abono) del paquete. Permiso: PagarPaquete. */
+    public function registrarPago(Request $request, $id)
+    {
+        $paquete = $this->consulta()->where('pa.id', $id)->first();
+        if (!$paquete) {
+            return response(get_response_body(['El paquete no existe.']), Response::HTTP_NOT_FOUND);
+        }
+        $validator = Validator::make($request->all(), [
+            'monto' => 'required|numeric|gt:0',
+            'fecha_pago' => 'required|date',
+            'metodo_pago' => 'required|in:efectivo,transferencia,tarjeta,otro',
+            'referencia' => 'nullable|string|max:100',
+            'observacion' => 'nullable|string',
+        ], ['monto.gt' => 'El monto debe ser mayor que cero.']);
+        if ($validator->fails()) {
+            return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+        }
+        if ($paquete->estado === Paquetes::ANULADO) {
+            return response(get_response_body(['El paquete está anulado: no recibe pagos.']), Response::HTTP_CONFLICT);
+        }
+        if ((float) $request->monto > (float) $paquete->saldo + 0.001) {
+            return response(get_response_body(['El monto supera lo que falta por pagar del paquete ($' . number_format((float) $paquete->saldo, 0, ',', '.') . ').']), Response::HTTP_BAD_REQUEST);
+        }
+        try {
+            DB::transaction(fn () => Pago::modificarOCrear([
+                'alumno_id' => $paquete->alumno_id,
+                'paquete_id' => $paquete->id,
+                'plan_id' => $paquete->plan_id,
+                'sede_id' => $paquete->sede_id,
+                'monto' => $request->monto,
+                'fecha_pago' => Carbon::parse($request->fecha_pago)->toDateString(),
+                'metodo_pago' => $request->metodo_pago,
+                'referencia' => $request->referencia,
+                'observacion' => $request->observacion,
+            ]));
+        } catch (Exception $e) {
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+        return response(get_response_body(['El pago del paquete ha sido registrado.', 2],
+            $this->detalle($this->consulta()->where('pa.id', $id)->first())), Response::HTTP_CREATED);
+    }
+
+    /** Quita un pago del paquete (para corregirlo); lo pagado vuelve a quedar como saldo. Permiso: PagarPaquete. */
+    public function eliminarPago($id, $pagoId)
+    {
+        if (!DB::table('pagos')->where('id', $pagoId)->where('paquete_id', $id)->exists()) {
+            return response(get_response_body(['Ese pago no es de este paquete.']), Response::HTTP_NOT_FOUND);
+        }
+        try {
+            DB::transaction(fn () => Pago::eliminar($pagoId));
+        } catch (Exception $e) {
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+        return response(get_response_body(['El pago ha sido eliminado.', 3],
+            $this->detalle($this->consulta()->where('pa.id', $id)->first())), Response::HTTP_OK);
     }
 
     public function destroy($id)

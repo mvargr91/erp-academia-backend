@@ -234,7 +234,7 @@ class NotificadorAcademia
 
         for ($i = 0; $this->hoy->gte($ciclo['proximo_pago']) && $i < self::MAX_CICLOS_POR_CORRIDA; $i++) {
             $periodo = $ciclo['proximo_pago']->toDateString();
-            // Precio del ciclo según su posición entre los cursos del alumno y si va en pareja.
+            // Precio del ciclo según su posición entre los cursos del alumno y si el curso es en pareja.
             $precio = Tarifas::precio($m->id);
             $resumen['cargos']++;
             if (!$this->simular) {
@@ -419,6 +419,69 @@ class NotificadorAcademia
                 'error' => $error,
                 'created_at' => Carbon::now(),
                 'updated_at' => Carbon::now(),
+            ]);
+        });
+    }
+
+    /**
+     * Encola el resumen de una matrícula rápida: un solo correo con los cursos, su valor y el pago,
+     * en lugar de una bienvenida por curso y una confirmación por pago.
+     *
+     * @param array<int, float> $valores  matrícula (curso_alumno.id) => valor de su primer ciclo
+     * @param array|null $pago  fecha_pago y metodo_pago del pago recibido, si lo hubo
+     */
+    public static function resumenMatricula(int $alumnoId, array $valores, float $pagado, ?array $pago, bool $alumnoNuevo): void
+    {
+        $academia = \App\Support\Academias\GestorAcademias::actual();
+        $alumno = DB::table('alumnos')->where('id', $alumnoId)->first();
+        if (!$academia || !$alumno || !$alumno->correo) {
+            return;
+        }
+
+        $matriculas = DB::table('curso_alumno as ca')
+            ->join('cursos as c', 'c.id', '=', 'ca.curso_id')
+            ->leftJoin('ritmos as r', 'r.id', '=', 'c.ritmo_id')
+            ->whereIn('ca.id', array_keys($valores))
+            ->orderBy('ca.id')
+            ->select('ca.id', 'ca.ciclo_inicio', 'ca.modalidad', 'c.dia', 'c.hora', DB::raw('COALESCE(c.nombre, r.nombre) as curso'))
+            ->get();
+        $dinero = fn ($v) => '$' . number_format((float) $v, 0, ',', '.');
+        // Una línea por curso: nombre, horario, primera clase y valor del ciclo.
+        $lineas = $matriculas->map(fn ($m) => implode(' · ', array_filter([
+            $m->curso,
+            (self::DIAS_SEMANA[$m->dia] ?? '') . ' ' . substr((string) $m->hora, 0, 5),
+            $m->ciclo_inicio ? 'primera clase ' . Carbon::parse($m->ciclo_inicio)->format('d/m/Y') : null,
+            $m->modalidad === 'paquete' ? 'con tu paquete de clases' : $dinero($valores[$m->id] ?? 0),
+        ])));
+
+        $total = array_sum($valores);
+        $metodos = ['efectivo' => 'Efectivo', 'transferencia' => 'Transferencia', 'tarjeta' => 'Tarjeta', 'otro' => 'Otro'];
+        $correo = new Correo(Correo::MATRICULA, self::datosAcademia($academia), [
+            'alumno' => trim("{$alumno->nombres} {$alumno->apellidos}"),
+            'curso' => $lineas->count() === 1 ? $matriculas->first()->curso : "{$lineas->count()} cursos",
+            'cursos' => $lineas->implode("\n"),
+            'valor' => $total,
+            'pagado' => $dinero($pagado),
+            'saldo' => max(0, $total - $pagado),
+            'fecha_pago' => $pagado > 0 ? Carbon::parse($pago['fecha_pago'])->format('d/m/Y') : '',
+            'metodo' => $pagado > 0 ? ($metodos[$pago['metodo_pago']] ?? $pago['metodo_pago']) : '',
+            'alumno_nuevo' => $alumnoNuevo,
+        ]);
+
+        DB::afterCommit(function () use ($alumno, $correo) {
+            $estado = 'encolado';
+            $error = null;
+            try {
+                Mail::to($alumno->correo)->queue($correo);
+            } catch (Exception $e) {
+                $estado = 'error';
+                $error = $e->getMessage();
+                Log::error("No se pudo encolar el resumen de matrícula a {$alumno->correo}: {$error}");
+            }
+            DB::table('notificaciones_enviadas')->insert([
+                'tipo' => Correo::MATRICULA, 'curso_alumno_id' => null, 'alumno_id' => $alumno->id, 'curso_id' => null,
+                'periodo' => Carbon::now()->toDateString(), 'correo' => $alumno->correo,
+                'estado' => $estado, 'error' => $error, 'created_at' => Carbon::now(), 'updated_at' => Carbon::now(),
             ]);
         });
     }

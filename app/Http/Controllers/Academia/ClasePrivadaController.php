@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Academia;
 
-use App\Support\Configuracion\Configuracion;
 use Exception;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -10,30 +9,25 @@ use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\Controller;
+use App\Models\Academia\Pago;
 use App\Models\Academia\Sede;
 use App\Services\Academia\Paquetes;
+use App\Services\Academia\ClasesPrivadas;
 use Illuminate\Support\Facades\Validator;
 use App\Services\Academia\CalendarioCurso;
 
 /**
- * Clases personalizadas (privadas o de pareja). Se descuentan del paquete de cada alumno:
- *  - asistió / no asistió: descuenta 1 clase;
- *  - canceló con al menos HORAS_CANCELACION de anticipación: no descuenta; si fue tarde: descuenta.
+ * Clases personalizadas (privadas o de pareja). Las toman alumnos (se descuentan de su paquete, ver
+ * ClasesPrivadas) o una persona no registrada: la clase suelta, que solo guarda su nombre.
+ * Si la clase se cobra aparte (tiene valor), su pago se registra aquí mismo y queda en la tabla pagos.
+ *
+ * Asistencia y cobro son de perfiles distintos: el resultado de la clase se registra con el permiso
+ * Modificar de Clases personalizadas; registrar, cambiar o quitar su pago exige el permiso Pagar
+ * de la misma opción (PagarClasePrivada).
  */
 class ClasePrivadaController extends Controller
 {
-    /** Horas mínimas para cancelar sin descuento (parámetro HORAS_CANCELACION_CLASE). */
-    public static function horasCancelacion(): int
-    {
-        return Configuracion::entero('HORAS_CANCELACION_CLASE', 24);
-    }
-
-    private const RESULTADOS = [
-        'pendiente' => 'Pendiente',
-        'asistio' => 'Asistió',
-        'no_asistio' => 'No asistió',
-        'cancelo' => 'Canceló',
-    ];
+    private const RESULTADOS = ClasesPrivadas::RESULTADOS;
     private const ESTADOS = ['programada' => 'Programada', 'realizada' => 'Realizada', 'cancelada' => 'Cancelada'];
 
     private function alumnosDe(array $claseIds)
@@ -47,7 +41,96 @@ class ClasePrivadaController extends Controller
             ->groupBy('clase_privada_id');
     }
 
-    private function formatear(object $c, $alumnos, bool $detalle = false): array
+    /** Reglas del cobro de la clase (valor y pago), comunes a agendar, modificar y registrar. */
+    private const REGLAS_COBRO = [
+        'valor' => 'nullable|numeric|min:0',
+        'pagada' => 'nullable|boolean',
+        'fecha_pago' => 'nullable|required_if:pagada,true,1|date',
+        'metodo_pago' => 'nullable|in:efectivo,transferencia,tarjeta,otro',
+        'referencia' => 'nullable|string|max:100',
+    ];
+    private const MENSAJES_COBRO = ['fecha_pago.required_if' => 'Indica la fecha del pago.'];
+
+    private function errorDeCobro(Request $request, $valorActual = null): ?string
+    {
+        $valor = $request->has('valor') ? $request->valor : $valorActual;
+        return $request->boolean('pagada') && (float) $valor <= 0 ? 'Indica el valor de la clase para registrar su pago.' : null;
+    }
+
+    /** Pago de cada clase (el que se registró desde la clase), por id de clase. */
+    private function pagosDe(array $claseIds)
+    {
+        return DB::table('pagos')->whereIn('clase_privada_id', $claseIds)
+            ->get(['id', 'clase_privada_id', 'monto', 'fecha_pago', 'metodo_pago', 'referencia'])
+            ->keyBy('clase_privada_id');
+    }
+
+    private function cambiaElPago(object $pago, Request $request, $valor): bool
+    {
+        return (float) $pago->monto !== (float) $valor
+            || $pago->fecha_pago !== Carbon::parse($request->fecha_pago)->toDateString()
+            || $pago->metodo_pago !== ($request->metodo_pago ?: 'efectivo')
+            || (string) $pago->referencia !== (string) $request->referencia;
+    }
+
+    /**
+     * Mensaje si lo que la petición pide hacer con el pago de la clase (marcarla pagada, cambiar el
+     * pago o quitarlo) requiere el permiso Pagar y el usuario no lo tiene; null si puede.
+     */
+    private function permisoDePagoFaltante(Request $request, ?int $claseId): ?string
+    {
+        if (!$request->has('pagada')) {
+            return null;
+        }
+        $clase = $claseId ? DB::table('clases_privadas')->find($claseId) : null;
+        $pago = $claseId ? DB::table('pagos')->where('clase_privada_id', $claseId)->first() : null;
+        $pagada = $request->boolean('pagada');
+        $valor = $request->has('valor') ? $request->valor : ($clase->valor ?? null);
+        $accion = match (true) {
+            $pagada && !$pago => 'registrar',
+            !$pagada && (bool) $pago => 'quitar',
+            $pagada && $this->cambiaElPago($pago, $request, $valor) => 'modificar',
+            default => null,
+        };
+        return $accion && !Auth::user()->checkPermissionTo('PagarClasePrivada', 'api') ? "No tienes permiso para {$accion} el pago de la clase." : null;
+    }
+
+    /**
+     * Deja el pago de la clase como lo indica la petición (solo si envía `pagada`): lo crea o
+     * actualiza por el valor de la clase, o lo elimina si se desmarca.
+     */
+    private function sincronizarPago(int $claseId, Request $request): void
+    {
+        if (!$request->has('pagada')) {
+            return;
+        }
+        $clase = DB::table('clases_privadas')->find($claseId);
+        $pago = DB::table('pagos')->where('clase_privada_id', $claseId)->first();
+        if (!$request->boolean('pagada')) {
+            if ($pago) {
+                Pago::eliminar($pago->id);
+            }
+            return;
+        }
+        if ($pago && !$this->cambiaElPago($pago, $request, $clase->valor)) {
+            return;
+        }
+        // El pago queda a nombre del primer alumno de la clase o, en una clase suelta, de la persona.
+        $alumnoId = DB::table('clase_privada_alumno')->where('clase_privada_id', $claseId)->orderBy('id')->value('alumno_id');
+        Pago::modificarOCrear(array_merge($pago ? ['id' => $pago->id] : [], [
+            'alumno_id' => $alumnoId,
+            'pagador_nombre' => $alumnoId ? null : $clase->externo_nombre,
+            'clase_privada_id' => $claseId,
+            'sede_id' => $clase->sede_id,
+            'monto' => $clase->valor,
+            'fecha_pago' => Carbon::parse($request->fecha_pago)->toDateString(),
+            'metodo_pago' => $request->metodo_pago ?: 'efectivo',
+            'referencia' => $request->referencia,
+            'observacion' => 'Clase personalizada del ' . Carbon::parse($clase->fecha)->format('d/m/Y'),
+        ]), false);
+    }
+
+    private function formatear(object $c, $alumnos, bool $detalle = false, ?object $pago = null): array
     {
         $lista = collect($alumnos)->map(function ($a) use ($detalle, $c) {
             $fila = [
@@ -78,9 +161,20 @@ class ClasePrivadaController extends Controller
             'estado' => $c->estado,
             'estado_nombre' => self::ESTADOS[$c->estado],
             'observacion' => $c->observacion,
+            'externo_nombre' => $c->externo_nombre,
+            'externo_telefono' => $c->externo_telefono,
+            'externo_resultado' => $c->externo_resultado,
+            'externo_resultado_nombre' => ClasesPrivadas::RESULTADOS_EXTERNO[$c->externo_resultado] ?? null,
+            'valor' => $c->valor !== null ? (float) $c->valor : null,
+            'pago' => $pago,
+            'pagada' => (bool) $pago,
+            // Para la lista: las clases sin valor se pagan con el paquete.
+            'cobro' => (float) $c->valor > 0 ? ($pago ? 'pagada' : 'por_cobrar') : 'paquete',
+            'cobro_nombre' => (float) $c->valor > 0 ? ($pago ? 'Pagada' : 'Por cobrar') : 'Con paquete',
             'alumnos' => $detalle ? $lista : $lista->pluck('alumno_id'),
             'detalle_alumnos' => $lista,
-            'alumnos_nombres' => $lista->pluck('nombre')->implode(', '),
+            'alumnos_nombres' => $lista->pluck('nombre')
+                ->concat($c->externo_nombre ? ["{$c->externo_nombre} (no registrado)"] : [])->implode(', '),
             'usuario_creacion_nombre' => $c->usuario_creacion_nombre,
             'usuario_modificacion_nombre' => $c->usuario_modificacion_nombre,
             'fecha_creacion' => Carbon::parse($c->created_at)->format('Y-m-d H:i:s'),
@@ -115,9 +209,11 @@ class ClasePrivadaController extends Controller
             $query->where('c.fecha', '<=', $request->fecha_hasta);
         }
         $pagina = $query->orderBy('c.fecha', 'desc')->orderBy('c.hora', 'desc')->paginate((int) ($request->limite ?? 100));
-        $alumnos = $this->alumnosDe($pagina->getCollection()->pluck('id')->all());
+        $ids = $pagina->getCollection()->pluck('id')->all();
+        $alumnos = $this->alumnosDe($ids);
+        $pagos = $this->pagosDe($ids);
         return response([
-            'datos' => $pagina->getCollection()->map(fn ($c) => $this->formatear($c, $alumnos[$c->id] ?? []))->all(),
+            'datos' => $pagina->getCollection()->map(fn ($c) => $this->formatear($c, $alumnos[$c->id] ?? [], false, $pagos[$c->id] ?? null))->all(),
             'desde' => $pagina->firstItem(),
             'hasta' => $pagina->lastItem(),
             'por_pagina' => $pagina->perPage(),
@@ -133,27 +229,35 @@ class ClasePrivadaController extends Controller
         if (!$clase) {
             return response(get_response_body(['La clase no existe.']), Response::HTTP_NOT_FOUND);
         }
-        $datos = $this->formatear($clase, $this->alumnosDe([$id])[$id] ?? [], true);
+        $datos = $this->formatear($clase, $this->alumnosDe([$id])[$id] ?? [], true, $this->pagosDe([$id])[$id] ?? null);
         $datos['alumnos'] = collect($datos['detalle_alumnos'])->pluck('alumno_id');
-        $datos['horas_cancelacion'] = self::horasCancelacion();
+        $datos['horas_cancelacion'] = ClasesPrivadas::horasCancelacion();
         return response($datos, Response::HTTP_OK);
     }
 
     private function validar(Request $request)
     {
         $request->merge(['sede_id' => Sede::resolver($request->sede_id)]);
-        $validator = Validator::make($request->all(), [
+        $validator = Validator::make($request->all(), self::REGLAS_COBRO + [
             'fecha' => 'required|date',
             'hora' => 'required|date_format:H:i',
             'duracion_min' => 'required|integer|between:15,300',
             'sede_id' => 'bail|required|integer|exists:sedes,id',
             'profesor_id' => 'nullable|integer|exists:profesores,id',
-            'alumnos' => 'required|array|min:1|max:10',
+            'alumnos' => 'required_without:externo_nombre|array|max:10',
             'alumnos.*' => 'integer|exists:alumnos,id',
+            'externo_nombre' => 'nullable|string|max:150',
+            'externo_telefono' => 'nullable|string|max:30',
             'observacion' => 'nullable|string',
-        ], ['alumnos.required' => 'Elige al menos un alumno.', 'sede_id.required' => 'Elige la sede de la clase.']);
+        ], self::MENSAJES_COBRO + [
+            'alumnos.required_without' => 'Elige al menos un alumno o escribe el nombre de la persona que toma la clase.',
+            'sede_id.required' => 'Elige la sede de la clase.',
+        ]);
         if ($validator->fails()) {
             return format_messages_validator($validator);
+        }
+        if ($error = $this->errorDeCobro($request)) {
+            return [$error];
         }
         $noLectivo = (new CalendarioCurso())->noLectivo(Carbon::parse($request->fecha), (int) $request->sede_id);
         if ($noLectivo) {
@@ -173,6 +277,9 @@ class ClasePrivadaController extends Controller
             'sede_id' => $request->sede_id,
             'profesor_id' => $request->profesor_id,
             'observacion' => $request->observacion,
+            'externo_nombre' => $request->externo_nombre ?: null,
+            'externo_telefono' => $request->externo_nombre ? $request->externo_telefono : null,
+            'valor' => $request->filled('valor') ? $request->valor : null,
             'usuario_modificacion_id' => $usuario->id,
             'usuario_modificacion_nombre' => $usuario->nombre,
             'updated_at' => Carbon::now(),
@@ -189,7 +296,7 @@ class ClasePrivadaController extends Controller
         }
 
         $actuales = DB::table('clase_privada_alumno')->where('clase_privada_id', $id)->pluck('alumno_id')->all();
-        $nuevos = array_map('intval', $request->alumnos);
+        $nuevos = array_map('intval', $request->alumnos ?? []);
         DB::table('clase_privada_alumno')->where('clase_privada_id', $id)->whereNotIn('alumno_id', $nuevos)->delete();
         foreach (array_diff($nuevos, $actuales) as $alumnoId) {
             DB::table('clase_privada_alumno')->insert([
@@ -197,6 +304,7 @@ class ClasePrivadaController extends Controller
                 'created_at' => Carbon::now(), 'updated_at' => Carbon::now(),
             ]);
         }
+        $this->sincronizarPago($id, $request);
         return $id;
     }
 
@@ -216,8 +324,11 @@ class ClasePrivadaController extends Controller
         if ($errores = $this->validar($request)) {
             return response(get_response_body($errores), Response::HTTP_BAD_REQUEST);
         }
+        if ($error = $this->permisoDePagoFaltante($request, null)) {
+            return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
+        }
         $id = DB::transaction(fn () => $this->guardar($request));
-        return response(get_response_body(['La clase ha sido agendada.' . $this->avisoSinPaquete($request->alumnos), 2],
+        return response(get_response_body(['La clase ha sido agendada.' . $this->avisoSinPaquete($request->alumnos ?? []), 2],
             ['id' => $id]), Response::HTTP_CREATED);
     }
 
@@ -233,14 +344,18 @@ class ClasePrivadaController extends Controller
         if ($errores = $this->validar($request)) {
             return response(get_response_body($errores), Response::HTTP_BAD_REQUEST);
         }
+        if ($error = $this->permisoDePagoFaltante($request, (int) $id)) {
+            return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
+        }
         DB::transaction(fn () => $this->guardar($request, (int) $id));
-        return response(get_response_body(['La clase ha sido modificada.' . $this->avisoSinPaquete($request->alumnos), 1],
+        return response(get_response_body(['La clase ha sido modificada.' . $this->avisoSinPaquete($request->alumnos ?? []), 1],
             ['id' => (int) $id]), Response::HTTP_OK);
     }
 
     /**
-     * Resultado por alumno: [{ alumno_id, resultado: asistio|no_asistio|cancelo, cancelado_en? }].
-     * Aplica la regla de descuento y deja la clase realizada (o cancelada si nadie la tomó).
+     * Resultado por alumno: [{ alumno_id, resultado: asistio|no_asistio|cancelo, a_tiempo?, cancelado_en? }]
+     * y, en una clase suelta, externo_resultado. Aplica el descuento y actualiza el estado de la clase.
+     * Solo asistencia: el cobro va por pago().
      */
     public function registrar(Request $request, $id)
     {
@@ -249,54 +364,35 @@ class ClasePrivadaController extends Controller
             return response(get_response_body(['La clase no existe.']), Response::HTTP_NOT_FOUND);
         }
         $validator = Validator::make($request->all(), [
-            'resultados' => 'required|array|min:1',
+            'resultados' => 'nullable|array',
             'resultados.*.alumno_id' => 'required|integer',
             'resultados.*.resultado' => 'required|in:asistio,no_asistio,cancelo',
+            'resultados.*.a_tiempo' => 'nullable|boolean',
             'resultados.*.cancelado_en' => 'nullable|date',
+            'externo_resultado' => 'nullable|in:' . implode(',', array_keys(ClasesPrivadas::RESULTADOS_EXTERNO)),
         ]);
         if ($validator->fails()) {
             return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
         }
 
-        $inicio = Carbon::parse($clase->fecha . ' ' . $clase->hora);
-        $horasCancelacion = self::horasCancelacion();
-        $fecha = Carbon::parse($clase->fecha);
         $sinPaquete = [];
-
         try {
-            DB::transaction(function () use ($request, $clase, $inicio, $fecha, $horasCancelacion, &$sinPaquete) {
-                foreach ($request->resultados as $r) {
+            DB::transaction(function () use ($request, $clase, &$sinPaquete) {
+                foreach ($request->resultados ?? [] as $r) {
                     $fila = DB::table('clase_privada_alumno')
                         ->where('clase_privada_id', $clase->id)->where('alumno_id', $r['alumno_id'])->first();
                     if (!$fila) {
                         continue;
                     }
-                    $canceladoEn = $r['resultado'] === 'cancelo' ? Carbon::parse($r['cancelado_en'] ?? Carbon::now()) : null;
-                    $descuenta = match ($r['resultado']) {
-                        'asistio', 'no_asistio' => true,
-                        'cancelo' => $canceladoEn->diffInHours($inicio, false) < $horasCancelacion,
-                    };
-                    DB::table('clase_privada_alumno')->where('id', $fila->id)->update([
-                        'resultado' => $r['resultado'],
-                        'cancelado_en' => $canceladoEn,
-                        'descuenta' => $descuenta,
-                        'updated_at' => Carbon::now(),
-                    ]);
-
-                    if ($descuenta) {
-                        $motivo = $r['resultado'] === 'cancelo' ? 'cancelacion_tardia' : $r['resultado'];
-                        if (!Paquetes::consumir((int) $r['alumno_id'], $fecha, 'privada', null, $clase->id, $motivo)) {
-                            $sinPaquete[] = (int) $r['alumno_id'];
-                        }
-                    } else {
-                        Paquetes::devolver((int) $r['alumno_id'], null, $clase->id);
+                    $aTiempo = isset($r['a_tiempo']) ? (bool) $r['a_tiempo'] : null;
+                    if (!ClasesPrivadas::aplicarResultado($clase, $fila, $r['resultado'], $aTiempo, $r['cancelado_en'] ?? null)) {
+                        $sinPaquete[] = (int) $r['alumno_id'];
                     }
                 }
-
-                $resultados = DB::table('clase_privada_alumno')->where('clase_privada_id', $clase->id)->pluck('resultado');
-                $estado = $resultados->every(fn ($x) => $x === 'cancelo') ? 'cancelada'
-                    : ($resultados->contains('pendiente') ? 'programada' : 'realizada');
-                DB::table('clases_privadas')->where('id', $clase->id)->update(['estado' => $estado, 'updated_at' => Carbon::now()]);
+                if ($clase->externo_nombre && $request->filled('externo_resultado')) {
+                    DB::table('clases_privadas')->where('id', $clase->id)->update(['externo_resultado' => $request->externo_resultado]);
+                }
+                ClasesPrivadas::actualizarEstado((int) $clase->id);
             });
         } catch (Exception $e) {
             return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
@@ -310,10 +406,46 @@ class ClasePrivadaController extends Controller
         return response(get_response_body([$mensaje, 1], ['id' => (int) $id]), Response::HTTP_OK);
     }
 
+    /**
+     * Cobro de la clase: su valor y si está pagada { valor, pagada, fecha_pago, metodo_pago, referencia }.
+     * Tiene permiso propio: la ruta exige PagarClasePrivada, no el de modificar la clase.
+     */
+    public function pago(Request $request, $id)
+    {
+        $clase = DB::table('clases_privadas')->find($id);
+        if (!$clase) {
+            return response(get_response_body(['La clase no existe.']), Response::HTTP_NOT_FOUND);
+        }
+        $validator = Validator::make($request->all(), self::REGLAS_COBRO + ['pagada' => 'required|boolean'], self::MENSAJES_COBRO);
+        if ($validator->fails()) {
+            return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+        }
+        if ($error = $this->errorDeCobro($request, $clase->valor)) {
+            return response(get_response_body([$error]), Response::HTTP_BAD_REQUEST);
+        }
+        if ($error = $this->permisoDePagoFaltante($request, (int) $id)) {
+            return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
+        }
+        try {
+            DB::transaction(function () use ($request, $clase) {
+                if ($request->has('valor')) {
+                    DB::table('clases_privadas')->where('id', $clase->id)->update(['valor' => $request->filled('valor') ? $request->valor : null]);
+                }
+                $this->sincronizarPago((int) $clase->id, $request);
+            });
+        } catch (Exception $e) {
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+        return response(get_response_body(['El cobro de la clase ha sido guardado.', 1], ['id' => (int) $id]), Response::HTTP_OK);
+    }
+
     public function destroy($id)
     {
         if (DB::table('consumos_paquete')->where('clase_privada_id', $id)->exists()) {
             return response(get_response_body(['No se puede eliminar: ya descontó clases de paquetes.']), Response::HTTP_CONFLICT);
+        }
+        if (DB::table('pagos')->where('clase_privada_id', $id)->exists()) {
+            return response(get_response_body(['No se puede eliminar: la clase tiene un pago registrado. Desmarca "Pagada" primero.']), Response::HTTP_CONFLICT);
         }
         DB::table('clases_privadas')->where('id', $id)->delete();
         return response(get_response_body(['La clase ha sido eliminada.', 3]), Response::HTTP_OK);

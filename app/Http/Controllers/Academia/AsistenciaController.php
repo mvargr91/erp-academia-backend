@@ -152,7 +152,44 @@ class AsistenciaController extends Controller
                 ];
             });
 
-        return response(array_merge($validacion, ['alumnos' => $alumnos]), Response::HTTP_OK);
+        // Si la lista de esa fecha ya se tomó, se devuelve lo marcado para corregirla en vez de duplicarla.
+        $sesion = DB::table('asistencias')
+            ->where('curso_id', $curso->id)
+            ->where('fecha_sesion', $fecha->toDateString())
+            ->first();
+        $marcados = $sesion
+            ? DB::table('asistencia_alumno')->where('asistencia_id', $sesion->id)->pluck('presente', 'alumno_id')
+            : collect();
+        $alumnos = $alumnos->map(fn ($a) => $a + [
+            'presente' => $marcados->has($a['alumno_id']) ? (bool) $marcados[$a['alumno_id']] : null,
+        ]);
+
+        // Alumnos de esa lista que ya no están matriculados: se conservan para no perder su registro al guardar.
+        $retirados = $marcados->keys()->diff($alumnos->pluck('alumno_id'));
+        if ($retirados->isNotEmpty()) {
+            $alumnos = $alumnos->concat(
+                DB::table('alumnos')
+                    ->whereIn('id', $retirados)
+                    ->select('id', DB::raw("CONCAT(nombres,' ',apellidos) as nombre"))
+                    ->orderBy('nombres')
+                    ->get()
+                    ->map(fn ($a) => [
+                        'alumno_id' => $a->id,
+                        'nombre' => $a->nombre,
+                        'clase_numero' => null,
+                        'clases_ciclo' => $clasesPorCiclo,
+                        'modalidad' => 'ciclo',
+                        'saldo' => 0.0,
+                        'presente' => (bool) $marcados[$a->id],
+                        'retirado' => true,
+                    ])
+            );
+        }
+
+        return response(array_merge($validacion, [
+            'asistencia' => $sesion ? ['id' => $sesion->id, 'observacion' => $sesion->observacion] : null,
+            'alumnos' => $alumnos->values(),
+        ]), Response::HTTP_OK);
     }
 
     public function show($id)
