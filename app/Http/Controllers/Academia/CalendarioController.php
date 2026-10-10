@@ -9,7 +9,6 @@ use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
 use App\Models\Academia\Curso;
-use App\Services\Academia\Paquetes;
 use Illuminate\Support\Facades\Validator;
 use App\Services\Academia\CalendarioCurso;
 
@@ -22,10 +21,8 @@ class CalendarioController extends Controller
     {
         $curso = DB::table('cursos as c')
             ->leftJoin('ritmos as r', 'r.id', '=', 'c.ritmo_id')
-            ->leftJoin('planes as p', 'p.id', '=', 'c.plan_id')
             ->where('c.id', $id)
-            ->select('c.id', 'c.nombre', 'c.sede_id', 'c.dia', 'c.hora', 'c.fecha_inicio', 'r.nombre as ritmo',
-                'p.nombre as plan', 'p.num_clases', 'p.periodicidad')
+            ->select('c.id', 'c.nombre', 'c.sede_id', 'c.dia', 'c.hora', 'c.fecha_inicio', 'r.nombre as ritmo')
             ->first();
         if (!$curso) {
             return response(get_response_body(['El curso no existe.']), Response::HTTP_NOT_FOUND);
@@ -45,35 +42,17 @@ class CalendarioController extends Controller
         }
         unset($semana);
 
-        $clasesPorCiclo = CalendarioCurso::clasesPorCiclo($curso->num_clases);
+        $clasesPorCiclo = CalendarioCurso::clasesPorCiclo();
         return response([
             'curso' => [
                 'id' => $curso->id,
                 'nombre' => $curso->nombre ?: $curso->ritmo,
                 'horario' => self::DIAS[(int) $curso->dia] . ' ' . substr((string) $curso->hora, 0, 5),
-                'plan' => $curso->plan,
                 'clases_por_ciclo' => $clasesPorCiclo,
                 'fecha_inicio' => $curso->fecha_inicio,
             ],
             'semanas' => $lista,
         ], Response::HTTP_OK);
-    }
-
-    /** Cambia cómo paga un alumno este curso: por ciclos de clases o con su paquete. */
-    public function modalidad(Request $request, $id, $alumnoId)
-    {
-        $validator = Validator::make($request->all(), ['modalidad' => 'required|in:ciclo,paquete']);
-        if ($validator->fails()) {
-            return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
-        }
-        if ($request->modalidad === 'paquete' && Paquetes::disponiblesHoy((int) $alumnoId)['restantes'] <= 0) {
-            return response(get_response_body(['El alumno no tiene un paquete vigente con clases disponibles.']), Response::HTTP_CONFLICT);
-        }
-        DB::transaction(fn () => Curso::cambiarModalidad((int) $id, (int) $alumnoId, $request->modalidad));
-        $mensaje = $request->modalidad === 'paquete'
-            ? 'El alumno ahora asiste con su paquete: cada clase descuenta 1.'
-            : 'El alumno ahora paga por ciclos de clases; se cargó el primer ciclo a su saldo.';
-        return response(get_response_body([$mensaje, 1]), Response::HTTP_OK);
     }
 
     /**
@@ -97,6 +76,31 @@ class CalendarioController extends Controller
         }
         $cuando = $request->boolean('ajustar_ciclo') ? 'Se ajustó el saldo del ciclo actual.' : 'El precio aplica desde el siguiente ciclo.';
         $mensaje = $parejaId ? "Los dos alumnos ahora pagan en pareja. {$cuando}" : "El alumno ahora paga individual. {$cuando}";
+        return response(get_response_body([$mensaje, 1], Curso::cargar($id)['matriculados']), Response::HTTP_OK);
+    }
+
+    /**
+     * Valor especial que paga un alumno por ciclo en este curso, en lugar de la tarifa.
+     * { valor: número|null (null = vuelve a la tarifa), motivo, ajustar_ciclo: bool } → matriculados actualizados.
+     */
+    public function valorEspecial(Request $request, $id, $alumnoId)
+    {
+        $validator = Validator::make($request->all(), [
+            'valor' => 'nullable|numeric|min:0',
+            'motivo' => 'nullable|string|max:150',
+            'ajustar_ciclo' => 'nullable|boolean',
+        ]);
+        if ($validator->fails()) {
+            return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+        }
+        $valor = $request->filled('valor') ? (float) $request->valor : null;
+        try {
+            DB::transaction(fn () => Curso::valorEspecial((int) $id, (int) $alumnoId, $valor, $request->motivo, $request->boolean('ajustar_ciclo')));
+        } catch (DomainException $e) {
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_CONFLICT);
+        }
+        $cuando = $request->boolean('ajustar_ciclo') ? 'Se ajustó el saldo del ciclo actual.' : 'Aplica desde el siguiente ciclo.';
+        $mensaje = $valor === null ? "El alumno vuelve a pagar la tarifa. {$cuando}" : "Se guardó el valor especial del alumno. {$cuando}";
         return response(get_response_body([$mensaje, 1], Curso::cargar($id)['matriculados']), Response::HTTP_OK);
     }
 

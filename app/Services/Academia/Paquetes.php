@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
 /**
  * Paquetes de clases de los alumnos.
  *
- * Un paquete sirve para cursos grupales (matrícula con modalidad 'paquete') y clases privadas.
+ * Un paquete es de clases personalizadas; no tiene que ver con los cursos, que se pagan por ciclos.
  * Cada clase usada es un registro en consumos_paquete; se descuenta del paquete vigente que vence
  * primero. Vencido = pasó su fecha de vencimiento; agotado = usó todas sus clases.
  */
@@ -111,7 +111,7 @@ class Paquetes
     }
 
     /**
-     * Descuenta una clase (idempotente por asistencia/clase privada y alumno).
+     * Descuenta una clase (idempotente por clase privada y alumno).
      * Con $paqueteId se descuenta de ese paquete; si no, del vigente que vence primero.
      * Devuelve el consumo o null si no hay paquete del que descontar.
      */

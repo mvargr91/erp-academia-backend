@@ -37,13 +37,11 @@ class Matriculas
     {
         $cursos = DB::table('cursos as c')
             ->leftJoin('ritmos as r', 'r.id', '=', 'c.ritmo_id')
-            ->leftJoin('planes as p', 'p.id', '=', 'c.plan_id')
             ->leftJoin('sedes as s', 's.id', '=', 'c.sede_id')
             ->whereIn('c.id', $cursoIds)
             ->select(
                 'c.id', 'c.cupo_max', 'c.activo', 'c.estado', 's.nombre as sede',
                 DB::raw("CONCAT(COALESCE(c.nombre, r.nombre), ' - ', DATE_FORMAT(c.hora, '%H:%i')) as curso"),
-                'p.nombre as plan', 'p.valor', 'p.periodicidad',
                 DB::raw('(SELECT COUNT(*) FROM curso_alumno WHERE curso_alumno.curso_id = c.id AND curso_alumno.estado = 1) as matriculados'),
             )
             ->get()
@@ -52,8 +50,6 @@ class Matriculas
         $yaMatriculado = $alumnoId
             ? DB::table('curso_alumno')->where('alumno_id', $alumnoId)->whereIn('curso_id', $cursoIds)->pluck('curso_id')->all()
             : [];
-        // Igual que Curso::matricular: con paquete vigente descuenta clases y no causa ciclos.
-        $porPaquete = $alumnoId && Paquetes::vigente($alumnoId, Carbon::today());
         // Cursos que el alumno ya paga por ciclo: los nuevos siguen después de esos.
         $porCiclo = $alumnoId ? count(Tarifas::matriculasPorCiclo($alumnoId)) : 0;
 
@@ -67,20 +63,16 @@ class Matriculas
                 'curso_id' => $c->id,
                 'curso' => $c->curso,
                 'sede' => $c->sede,
-                'plan' => $c->plan,
                 'en_pareja' => !empty($parejas[$c->id]),
-                'modalidad' => $porPaquete ? 'paquete' : 'ciclo',
                 'ya_matriculado' => in_array($c->id, $yaMatriculado),
                 'cupo_disponible' => $c->cupo_max === null ? null : max(0, (int) $c->cupo_max - (int) $c->matriculados),
             ];
             if ($fila['ya_matriculado']) {
-                $precio = ['valor' => 0.0, 'base' => (float) $c->valor, 'regla' => 'Ya está matriculado'];
-            } elseif ($porPaquete) {
-                $precio = ['valor' => 0.0, 'base' => (float) $c->valor, 'regla' => 'Paga con su paquete de clases'];
+                $precio = ['valor' => 0.0, 'base' => Tarifas::precioBase(), 'regla' => 'Ya está matriculado'];
             } else {
-                $precio = Tarifas::calcular((float) $c->valor, $porCiclo + 1, !empty($parejas[$c->id]));
-                // Solo estos cursos ocupan lugar en el orden (mismo criterio de Tarifas::matriculasPorCiclo).
-                if ($c->estado && $c->activo && $c->periodicidad === 'mensual' && (float) $c->valor > 0) {
+                $precio = Tarifas::calcular($porCiclo + 1, !empty($parejas[$c->id]));
+                // Solo los cursos activos ocupan lugar en el orden (mismo criterio de Tarifas::matriculasPorCiclo).
+                if ($c->estado && $c->activo) {
                     $porCiclo++;
                 }
             }
@@ -182,7 +174,6 @@ class Matriculas
             Pago::modificarOCrear([
                 'alumno_id' => $alumnoId,
                 'curso_id' => $curso->id,
-                'plan_id' => $curso->plan_id,
                 'sede_id' => $pago['sede_id'] ?? null,
                 'monto' => $abono,
                 'fecha_pago' => $pago['fecha_pago'],

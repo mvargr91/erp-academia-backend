@@ -13,9 +13,9 @@ use Illuminate\Support\Facades\Validator;
 
 /**
  * Tarifas de la academia en una sola pantalla:
- *  - Escalas de cursos grupales: total por ciclo según cuántos cursos, individual y en pareja.
- *  - Clases personalizadas: los planes de paquete (1, 4, 8… clases) con su precio normal y el
- *    precio para quien ya es alumno de un curso grupal.
+ *  - Cursos: total por ciclo según cuántos cursos, individual y en pareja (única fuente del precio).
+ *  - Clases personalizadas: la clase suelta y los paquetes (4, 8… clases) con su precio normal, el
+ *    precio para quien ya es alumno de un curso y los días de vigencia.
  */
 class TarifaController extends Controller
 {
@@ -35,6 +35,7 @@ class TarifaController extends Controller
                 'clases' => (int) $p->num_clases,
                 'valor' => (float) $p->valor,
                 'valor_alumno' => $p->valor_alumno === null ? null : (float) $p->valor_alumno,
+                'vigencia_dias' => $p->vigencia_dias === null ? null : (int) $p->vigencia_dias,
             ]);
         return array_map('array_values', Tarifas::escalas()) + ['personalizadas' => $personalizadas];
     }
@@ -63,6 +64,7 @@ class TarifaController extends Controller
             'personalizadas.*.clases' => 'integer|required|min:1',
             'personalizadas.*.valor' => 'numeric|required|min:0',
             'personalizadas.*.valor_alumno' => 'numeric|nullable|min:0',
+            'personalizadas.*.vigencia_dias' => 'integer|nullable|min:1',
         ], [], [
             'individual.*' => 'total de la escala individual',
             'pareja.*' => 'total de la escala de pareja',
@@ -70,6 +72,7 @@ class TarifaController extends Controller
             'personalizadas.*.clases' => 'número de clases',
             'personalizadas.*.valor' => 'precio',
             'personalizadas.*.valor_alumno' => 'precio para alumnos',
+            'personalizadas.*.vigencia_dias' => 'días de vigencia',
         ]);
         if ($validator->fails()) {
             return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
@@ -103,7 +106,7 @@ class TarifaController extends Controller
         }
     }
 
-    /** Los paquetes son planes de periodicidad 'paquete'; los ya vendidos conservan su valor. */
+    /** Los paquetes se guardan en la tabla planes (periodicidad 'paquete'); los ya vendidos conservan su valor. */
     private function guardarPersonalizadas(array $paquetes): void
     {
         $conservados = [];
@@ -113,6 +116,7 @@ class TarifaController extends Controller
                 'num_clases' => $p['clases'],
                 'valor' => $p['valor'],
                 'valor_alumno' => $p['valor_alumno'] ?? null,
+                'vigencia_dias' => $p['vigencia_dias'] ?? null,
             ];
             if (!empty($p['id'])) {
                 // Solo se tocan planes de paquete (un id de otro tipo de plan se ignora).

@@ -14,7 +14,7 @@ use App\Mail\Academia\NotificacionAlumnoMail as Correo;
 /**
  * Cobro por ciclos de clases y correos a los alumnos de la academia activa.
  *
- * Cada matrícula con plan mensual paga ciclos de N clases (num_clases del plan, 4 por defecto)
+ * Cada matrícula paga ciclos de N clases (parámetro CLASES_POR_CICLO, 4 por defecto) al precio de Tarifas
  * según el calendario de su curso: una clase semanal que se salta festivos y cierres
  * (CalendarioCurso). Si una clase cae en festivo, el ciclo termina una semana después.
  *  - La matrícula cobra el primer ciclo; el día de la 1.ª clase del ciclo siguiente se causa su valor.
@@ -41,8 +41,9 @@ class NotificadorAcademia
         $cadaDias = Configuracion::entero('DIAS_ENTRE_AVISOS_MORA', config('academias.notificaciones.dias_entre_avisos_mora'));
         $desdeMora = $this->hoy->copy()->subDays($cadaDias - 1)->toDateString();
 
+        // Sin tarifa definida los cursos no causan cobro.
+        $porCiclos = Tarifas::cobra();
         foreach ($this->matriculas()->get() as $m) {
-            $porCiclos = $m->periodicidad === 'mensual' && (float) $m->valor_plan > 0;
             $ciclo = $porCiclos ? $this->avanzarCiclo($m, $resumen) : null;
 
             if (!$m->correo) {
@@ -199,23 +200,20 @@ class NotificadorAcademia
             ->exists();
     }
 
-    /** Matrículas activas con su curso (día, inicio), alumno y plan. */
+    /** Matrículas activas con su curso (día, inicio) y alumno. */
     private function matriculas()
     {
         return DB::table('curso_alumno as ca')
             ->join('cursos as c', 'c.id', '=', 'ca.curso_id')
             ->join('alumnos as a', 'a.id', '=', 'ca.alumno_id')
-            ->leftJoin('planes as p', 'p.id', '=', 'c.plan_id')
             ->where('ca.estado', 1)
-            ->where('ca.modalidad', 'ciclo') // las matrículas por paquete descuentan clases, no causan ciclos
             ->where('c.estado', 1)
             ->where('c.activo', 1)
             ->where('a.estado', 1)
             ->select(
                 'ca.id', 'ca.curso_id', 'ca.alumno_id', 'ca.saldo', 'ca.fecha_matricula', 'ca.ciclo_inicio',
                 'c.nombre as curso', 'c.sede_id', 'c.dia', 'c.fecha_inicio', 'a.correo',
-                DB::raw("CONCAT(a.nombres, ' ', a.apellidos) as alumno"),
-                'p.valor as valor_plan', 'p.periodicidad', 'p.num_clases'
+                DB::raw("CONCAT(a.nombres, ' ', a.apellidos) as alumno")
             );
     }
 
@@ -225,7 +223,7 @@ class NotificadorAcademia
      */
     private function avanzarCiclo(object $m, array &$resumen): array
     {
-        $n = CalendarioCurso::clasesPorCiclo($m->num_clases);
+        $n = CalendarioCurso::clasesPorCiclo();
         $ciclo = $this->calendario->ciclo($m, $m, $n);
 
         if (!$m->ciclo_inicio && !$this->simular) {
@@ -368,15 +366,13 @@ class NotificadorAcademia
         $m = DB::table('curso_alumno as ca')
             ->join('cursos as c', 'c.id', '=', 'ca.curso_id')
             ->join('alumnos as a', 'a.id', '=', 'ca.alumno_id')
-            ->leftJoin('planes as p', 'p.id', '=', 'c.plan_id')
             ->leftJoin('profesores as pr', 'pr.id', '=', 'c.profesor_id')
             ->where('ca.id', $cursoAlumnoId)
             ->select(
-                'ca.id', 'ca.curso_id', 'ca.alumno_id', 'ca.fecha_matricula', 'ca.ciclo_inicio', 'ca.modalidad', 'a.correo',
+                'ca.id', 'ca.curso_id', 'ca.alumno_id', 'ca.fecha_matricula', 'ca.ciclo_inicio', 'a.correo',
                 'c.nombre as curso', 'c.sede_id', 'c.dia', 'c.hora', 'c.fecha_inicio',
                 DB::raw("CONCAT(a.nombres, ' ', a.apellidos) as alumno"),
-                DB::raw("CONCAT(pr.nombres, ' ', pr.apellidos) as profesor"),
-                'p.valor as valor_plan', 'p.periodicidad', 'p.num_clases'
+                DB::raw("CONCAT(pr.nombres, ' ', pr.apellidos) as profesor")
             )
             ->first();
 
@@ -384,8 +380,8 @@ class NotificadorAcademia
             return;
         }
 
-        $porCiclos = $m->periodicidad === 'mensual' && $m->modalidad === 'ciclo';
-        $ciclo = (new CalendarioCurso())->ciclo($m, $m, CalendarioCurso::clasesPorCiclo($m->num_clases));
+        $porCiclos = Tarifas::cobra();
+        $ciclo = (new CalendarioCurso())->ciclo($m, $m, CalendarioCurso::clasesPorCiclo());
         $datos = [
             'alumno' => $m->alumno,
             'curso' => $m->curso,
@@ -443,7 +439,7 @@ class NotificadorAcademia
             ->leftJoin('ritmos as r', 'r.id', '=', 'c.ritmo_id')
             ->whereIn('ca.id', array_keys($valores))
             ->orderBy('ca.id')
-            ->select('ca.id', 'ca.ciclo_inicio', 'ca.modalidad', 'c.dia', 'c.hora', DB::raw('COALESCE(c.nombre, r.nombre) as curso'))
+            ->select('ca.id', 'ca.ciclo_inicio', 'c.dia', 'c.hora', DB::raw('COALESCE(c.nombre, r.nombre) as curso'))
             ->get();
         $dinero = fn ($v) => '$' . number_format((float) $v, 0, ',', '.');
         // Una línea por curso: nombre, horario, primera clase y valor del ciclo.
@@ -451,7 +447,7 @@ class NotificadorAcademia
             $m->curso,
             (self::DIAS_SEMANA[$m->dia] ?? '') . ' ' . substr((string) $m->hora, 0, 5),
             $m->ciclo_inicio ? 'primera clase ' . Carbon::parse($m->ciclo_inicio)->format('d/m/Y') : null,
-            $m->modalidad === 'paquete' ? 'con tu paquete de clases' : $dinero($valores[$m->id] ?? 0),
+            $dinero($valores[$m->id] ?? 0),
         ])));
 
         $total = array_sum($valores);

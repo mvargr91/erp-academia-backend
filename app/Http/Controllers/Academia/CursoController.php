@@ -22,8 +22,6 @@ class CursoController extends Controller
             'sede_id' => 'bail|required|integer|exists:sedes,id',
             'ritmo_id' => 'integer|required|exists:ritmos,id',
             'profesor_id' => 'integer|nullable|exists:profesores,id',
-            'plan_id' => 'integer|nullable|exists:planes,id',
-            'en_pareja' => 'boolean|nullable',
             'dia' => 'integer|required|between:0,6',
             'hora' => 'required|date_format:H:i',
             'fecha_inicio' => 'date|nullable',

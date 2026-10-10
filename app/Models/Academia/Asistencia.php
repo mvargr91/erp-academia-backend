@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\Seguridad\AuditoriaTabla;
-use App\Services\Academia\Paquetes;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class Asistencia extends Model
@@ -154,7 +153,6 @@ class Asistencia extends Model
                     'updated_at' => Carbon::now(),
                 ]);
             }
-            self::sincronizarPaquetes($asistencia, $dto['asistentes']);
         }
 
         AuditoriaTabla::crear([
@@ -167,32 +165,6 @@ class Asistencia extends Model
         ]);
 
         return Asistencia::cargar($asistencia->id);
-    }
-
-    /**
-     * Alumnos matriculados por paquete: estar presente descuenta una clase de su paquete vigente;
-     * desmarcarlo la devuelve. (Al eliminar la asistencia, los consumos se borran en cascada.)
-     */
-    private static function sincronizarPaquetes(Asistencia $asistencia, array $asistentes): void
-    {
-        $porPaquete = DB::table('curso_alumno')
-            ->where('curso_id', $asistencia->curso_id)
-            ->where('modalidad', 'paquete')
-            ->pluck('alumno_id')
-            ->all();
-        $fecha = Carbon::parse($asistencia->fecha_sesion);
-
-        foreach ($asistentes as $asistente) {
-            $alumnoId = (int) $asistente['alumno_id'];
-            if (!in_array($alumnoId, $porPaquete)) {
-                continue;
-            }
-            if (!empty($asistente['presente'])) {
-                Paquetes::consumir($alumnoId, $fecha, 'grupal', $asistencia->id, null, 'asistio');
-            } else {
-                Paquetes::devolver($alumnoId, $asistencia->id, null);
-            }
-        }
     }
 
     public static function eliminar($id)

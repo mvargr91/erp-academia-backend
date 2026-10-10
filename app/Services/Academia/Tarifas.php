@@ -7,8 +7,9 @@ use Illuminate\Support\Facades\DB;
 /**
  * Precio por ciclo de una matrícula de curso grupal.
  *
- * Cada academia puede definir escalas de precio (Configuración → Tarifas): el total que paga un
- * alumno por ciclo según cuántos cursos toma, y otra para quienes pagan en pareja (total de los dos).
+ * Es la única fuente del precio de un curso (Configuración → Tarifas); los cursos no tienen plan ni
+ * precio propio. Cada academia define el total que paga un alumno por ciclo según cuántos cursos
+ * toma, y otro para quienes pagan en pareja (total de los dos).
  * Individual o en pareja es de cada matrícula, no del curso: en un mismo curso unos alumnos pagan
  * solos y otros dos pagan juntos (curso_alumno.pareja_alumno_id, enlazado en ambas matrículas).
  *   Individual: 1 curso 100.000 · 2 cursos 180.000 · 3 cursos 230.000 …
@@ -18,8 +19,13 @@ use Illuminate\Support\Facades\DB;
  * el curso N cobra total(N) − total(N−1). Con el ejemplo, el 3.er curso suma 50.000 y el alumno
  * paga 230.000 entre los tres. En pareja cada persona paga la mitad de lo que suma el curso.
  *
- * Las escalas son opcionales: si no hay escala (o no llega hasta esa cantidad de cursos), el curso
- * cobra el precio de su plan.
+ * El primer valor de la tarifa individual es el precio de un curso. Si la tarifa no llega hasta esa
+ * cantidad de cursos, el curso adicional cobra ese precio completo (academia sin descuento: basta
+ * con definir el precio de 1 curso). Sin tarifa individual los cursos no causan cobro.
+ *
+ * Excepción: una matrícula puede tener un valor especial pactado con el alumno
+ * (curso_alumno.valor_especial: beca, convenio, cortesía). Ese alumno paga ese valor por ciclo en
+ * ese curso en lugar de la tarifa; el curso sigue contando en el orden de sus demás cursos.
  *
  * Se calcula al cobrar cada ciclo, así que si el alumno se retira de un curso los demás
  * se recalculan solos desde el siguiente ciclo.
@@ -47,31 +53,46 @@ class Tarifas
     public static function precio(int $cursoAlumnoId): array
     {
         $m = DB::table('curso_alumno as ca')
-            ->join('cursos as c', 'c.id', '=', 'ca.curso_id')
-            ->leftJoin('planes as p', 'p.id', '=', 'c.plan_id')
             ->where('ca.id', $cursoAlumnoId)
-            ->select('ca.id', 'ca.alumno_id', 'p.valor as valor_plan', DB::raw(self::SQL_EN_PAREJA . ' as en_pareja'))
+            ->select('ca.id', 'ca.alumno_id', 'ca.valor_especial', DB::raw(self::SQL_EN_PAREJA . ' as en_pareja'))
             ->first();
         if (!$m) {
             return ['valor' => 0.0, 'base' => 0.0, 'regla' => 'Sin matrícula', 'posicion' => 0];
         }
-        return self::calcular(
-            (float) ($m->valor_plan ?? 0),
-            self::posicion($m->alumno_id, $m->id),
-            (bool) $m->en_pareja
-        );
+        $posicion = self::posicion($m->alumno_id, $m->id);
+        if ($m->valor_especial !== null) {
+            return ['valor' => round((float) $m->valor_especial, 2), 'base' => self::precioBase(), 'regla' => 'Valor especial', 'posicion' => $posicion];
+        }
+        return self::calcular($posicion, (bool) $m->en_pareja);
+    }
+
+    /** Precio de un curso (tarifa individual de 1 curso); 0 si la academia aún no define tarifas. */
+    public static function precioBase(): float
+    {
+        return (float) (self::escalas()[self::INDIVIDUAL][1] ?? 0);
+    }
+
+    /** ¿Los cursos causan cobro? Solo si hay tarifa. */
+    public static function cobra(): bool
+    {
+        return self::precioBase() > 0;
     }
 
     /**
-     * Precio de un ciclo dado el valor del plan y la posición del curso entre los del alumno.
+     * Precio de un ciclo según la posición del curso entre los del alumno (`base` = precio de un curso).
      * Sirve también para cotizar antes de matricular (Matriculas::cotizar).
      *
      * @return array{valor: float, base: float, regla: string, posicion: int}
      */
-    public static function calcular(float $base, int $posicion, bool $enPareja = false): array
+    public static function calcular(int $posicion, bool $enPareja = false): array
     {
         $escalas = self::escalas();
-        [$valor, $regla] = [$base, 'Precio del plan'];
+        $base = self::precioBase();
+        if ($base <= 0) {
+            return ['valor' => 0.0, 'base' => 0.0, 'regla' => 'Sin tarifa', 'posicion' => $posicion];
+        }
+        // Más cursos de los que cubre la tarifa: el adicional cobra el precio completo de un curso.
+        [$valor, $regla] = [$base, $posicion === 1 ? 'Tarifa individual' : "{$posicion}.º curso"];
 
         // En pareja se usa su escala si llega hasta esta posición; si no, la individual.
         foreach ($enPareja ? [self::PAREJA, self::INDIVIDUAL] : [self::INDIVIDUAL] as $tipo) {
@@ -137,7 +158,7 @@ class Tarifas
         unset(self::$cache[DB::connection()->getDatabaseName()]);
     }
 
-    /** Lugar (1, 2, 3…) de la matrícula entre los cursos que el alumno paga por ciclo, por orden de matrícula. */
+    /** Lugar (1, 2, 3…) de la matrícula entre los cursos activos del alumno, por orden de matrícula. */
     public static function posicion(int $alumnoId, int $cursoAlumnoId): int
     {
         $ids = self::matriculasPorCiclo($alumnoId);
@@ -145,19 +166,15 @@ class Tarifas
         return $i === false ? count($ids) + 1 : $i + 1;
     }
 
-    /** Matrículas (curso_alumno.id) que el alumno paga por ciclo, en orden de matrícula. */
+    /** Matrículas (curso_alumno.id) del alumno en cursos activos, en orden de matrícula. */
     public static function matriculasPorCiclo(int $alumnoId): array
     {
         return DB::table('curso_alumno as ca')
             ->join('cursos as c', 'c.id', '=', 'ca.curso_id')
-            ->join('planes as p', 'p.id', '=', 'c.plan_id')
             ->where('ca.alumno_id', $alumnoId)
             ->where('ca.estado', 1)
-            ->where('ca.modalidad', 'ciclo')
             ->where('c.estado', 1)
             ->where('c.activo', 1)
-            ->where('p.periodicidad', 'mensual')
-            ->where('p.valor', '>', 0)
             ->orderBy('ca.fecha_matricula')
             ->orderBy('ca.id')
             ->pluck('ca.id')

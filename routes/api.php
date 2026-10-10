@@ -170,7 +170,7 @@ Route::group(['middleware' => ['auth:api']], function (){
         });
     });
 
-    // Paquetes de clases de los alumnos (cursos grupales y clases privadas)
+    // Paquetes de clases personalizadas de los alumnos
     Route::group(["prefix" => "paquetes"], function () {
         Route::get('/', [Academia\PaqueteController::class, 'index'])->name('paquetes.index')->middleware(Permisos::lectura(['Paquete', 'Pago'], ['PagarPaquete']));
         Route::post('/', [Academia\PaqueteController::class, 'store'])->name('paquetes.store')->middleware('permission:CrearPaquete');
@@ -237,20 +237,14 @@ Route::group(['middleware' => ['auth:api']], function (){
         Route::delete('/{id}', [Academia\RitmoController::class, 'destroy'])->name('ritmos.delete')->middleware('permission:EliminarRitmo');
     });
 
-    // Tarifas: escalas de precio por cantidad de cursos (individual y pareja)
+    // Tarifas: precio de los cursos (individual y pareja) y de las clases personalizadas
     Route::group(["prefix" => "tarifas"], function () {
         Route::get('/', [Academia\TarifaController::class, 'index'])->name('tarifas.index')->middleware(Permisos::lectura(['Tarifa']));
         Route::put('/', [Academia\TarifaController::class, 'update'])->name('tarifas.update')->middleware('permission:ModificarTarifa');
     });
 
-    // Planes
-    Route::group(["prefix" => "planes"], function () {
-        Route::get('/', [Academia\PlanController::class, 'index'])->name('planes.index')->middleware(Permisos::lectura(['Plan', 'Curso', 'Pago', 'Paquete', 'Tarifa']));
-        Route::post('/', [Academia\PlanController::class, 'store'])->name('planes.store')->middleware('permission:CrearPlan');
-        Route::get('/{id}', [Academia\PlanController::class, 'show'])->name('planes.show')->middleware(Permisos::lectura(['Plan', 'Curso', 'Pago', 'Paquete', 'Tarifa']));
-        Route::put('/{id}', [Academia\PlanController::class, 'update'])->name('planes.update')->middleware('permission:ModificarPlan');
-        Route::delete('/{id}', [Academia\PlanController::class, 'destroy'])->name('planes.delete')->middleware('permission:EliminarPlan');
-    });
+    // Tipos de paquete de clases personalizadas (se definen en Tarifas): lista para vender un paquete.
+    Route::get('planes', [Academia\PlanController::class, 'index'])->name('planes.index')->middleware(Permisos::lectura(['Paquete', 'Tarifa'], ['PagarPaquete']));
 
     // Profesores
     Route::group(["prefix" => "profesores"], function () {
@@ -282,7 +276,7 @@ Route::group(['middleware' => ['auth:api']], function (){
         Route::get('/', [Academia\CursoController::class, 'index'])->name('cursos.index')->middleware(Permisos::lectura(['Curso', 'Pago', 'Asistencia', 'TomaAsistencia', 'Matricula', 'EnvioCorreo']));
         Route::post('/', [Academia\CursoController::class, 'store'])->name('cursos.store')->middleware('permission:CrearCurso');
         Route::get('/{id}/calendario', [Academia\CalendarioController::class, 'curso'])->name('cursos.calendario')->middleware(Permisos::lectura(['Curso']));
-        Route::put('/{id}/alumnos/{alumnoId}/modalidad', [Academia\CalendarioController::class, 'modalidad'])->name('cursos.modalidad')->middleware('permission:FormaDePagoCurso');
+        Route::put('/{id}/alumnos/{alumnoId}/valor-especial', [Academia\CalendarioController::class, 'valorEspecial'])->name('cursos.valor-especial')->middleware('permission:ValorEspecialCurso');
         Route::put('/{id}/alumnos/{alumnoId}/pareja', [Academia\CalendarioController::class, 'pareja'])->name('cursos.pareja')->middleware('permission:FormaDePagoCurso');
         Route::get('/{id}', [Academia\CursoController::class, 'show'])->name('cursos.show')->middleware(Permisos::lectura(['Curso', 'Pago', 'Asistencia', 'TomaAsistencia', 'Matricula', 'EnvioCorreo']));
         Route::put('/{id}', [Academia\CursoController::class, 'update'])->name('cursos.update')->middleware('permission:ModificarCurso');
@@ -290,6 +284,10 @@ Route::group(['middleware' => ['auth:api']], function (){
     });
 
     // Pagos
+    // Condonar la deuda de un alumno (el saldo queda en 0 sin registrar un pago): permiso propio en Pagos.
+    Route::post('condonaciones', [Academia\CondonacionController::class, 'store'])->name('condonaciones.store')->middleware('permission:CondonarPago');
+    Route::delete('condonaciones/{id}', [Academia\CondonacionController::class, 'destroy'])->name('condonaciones.delete')->middleware('permission:CondonarPago');
+
     Route::group(["prefix" => "pagos"], function () {
         Route::get('/', [Academia\PagoController::class, 'index'])->name('pagos.index')->middleware(Permisos::lectura(['Pago']));
         Route::post('/', [Academia\PagoController::class, 'store'])->name('pagos.store')->middleware('permission:CrearPago');

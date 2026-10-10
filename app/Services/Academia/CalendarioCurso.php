@@ -27,9 +27,9 @@ class CalendarioCurso
     private ?string $cargadoHasta = null;
 
     /** Clases por ciclo de pago: las del plan, o 4 por defecto. */
-    public static function clasesPorCiclo(?int $numClases): int
+    public static function clasesPorCiclo(): int
     {
-        return $numClases && $numClases > 0 ? $numClases : Configuracion::entero('CLASES_POR_CICLO', 4);
+        return max(1, Configuracion::entero('CLASES_POR_CICLO', 4));
     }
 
     /** Festivos y cierres entre dos fechas: fecha => [tipo, motivo]. */

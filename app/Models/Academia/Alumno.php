@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\Seguridad\AuditoriaTabla;
+use App\Services\Academia\Tarifas;
 use App\Services\Academia\CalendarioCurso;
 use App\Services\Academia\NotificadorAcademia;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -166,35 +167,33 @@ class Alumno extends Model
         $cursos = DB::table('curso_alumno as ca')
             ->join('cursos as c', 'c.id', '=', 'ca.curso_id')
             ->leftJoin('ritmos as r', 'r.id', '=', 'c.ritmo_id')
-            ->leftJoin('planes as p', 'p.id', '=', 'c.plan_id')
             ->leftJoin('sedes as s', 's.id', '=', 'c.sede_id')
             ->where('ca.alumno_id', $id)
             ->where('ca.estado', 1)
             ->orderBy('ca.fecha_matricula')
             ->select(
-                'ca.id as curso_alumno_id', 'ca.curso_id', 'ca.modalidad', 'ca.saldo', 'ca.fecha_matricula', 'ca.ultima_fecha_pago',
+                'ca.id as curso_alumno_id', 'ca.curso_id', 'ca.saldo', 'ca.fecha_matricula', 'ca.ultima_fecha_pago',
                 DB::raw("CONCAT(COALESCE(c.nombre, r.nombre), ' - ', DATE_FORMAT(c.hora, '%H:%i')) as curso"),
-                'p.nombre as plan', 's.nombre as sede',
+                's.nombre as sede',
                 // Para el avance del ciclo (CalendarioCurso).
                 'ca.ciclo_inicio', 'c.dia', 'c.fecha_inicio', 'c.sede_id', 'c.estado as curso_estado', 'c.activo as curso_activo',
-                'p.num_clases', 'p.periodicidad',
                 DB::raw('(SELECT COALESCE(SUM(pg.monto), 0) FROM pagos pg WHERE pg.alumno_id = ca.alumno_id AND pg.curso_id = ca.curso_id AND pg.paquete_id IS NULL) as pagado'),
             )
             ->get();
         $calendario = new CalendarioCurso();
         $cursos = $cursos->map(function ($c) use ($calendario) {
             $fila = [
-                'curso_alumno_id' => $c->curso_alumno_id, 'curso_id' => $c->curso_id, 'modalidad' => $c->modalidad,
+                'curso_alumno_id' => $c->curso_alumno_id, 'curso_id' => $c->curso_id,
                 'fecha_matricula' => $c->fecha_matricula, 'ultima_fecha_pago' => $c->ultima_fecha_pago,
-                'curso' => $c->curso, 'plan' => $c->plan, 'sede' => $c->sede,
+                'curso' => $c->curso, 'sede' => $c->sede,
                 // Cobrado hasta hoy = lo pagado más lo que aún debe.
                 'saldo' => (float) $c->saldo, 'pagado' => (float) $c->pagado, 'cobrado' => (float) $c->pagado + (float) $c->saldo,
                 // Curso desactivado: ya no se le cobran más ciclos.
                 'curso_activo' => (bool) ($c->curso_estado && $c->curso_activo),
             ];
-            // Clases del ciclo vigente que ya se dictaron (solo si paga por ciclos).
-            if ($c->modalidad === 'ciclo' && $c->periodicidad === 'mensual') {
-                $ciclo = $calendario->ciclo($c, $c, CalendarioCurso::clasesPorCiclo($c->num_clases));
+            // Clases del ciclo vigente que ya se dictaron (si la academia cobra los cursos).
+            if (Tarifas::cobra()) {
+                $ciclo = $calendario->ciclo($c, $c, CalendarioCurso::clasesPorCiclo());
                 $fila += CalendarioCurso::avance($ciclo, Carbon::today()) + ['proximo_pago' => $ciclo['proximo_pago']->toDateString()];
             }
             return $fila;
@@ -207,10 +206,14 @@ class Alumno extends Model
             ->orderBy('pa.fecha_compra', 'desc')
             ->select('pa.id', 'pa.fecha_compra', 'pa.fecha_vencimiento', 'pa.clases_total', 'pa.valor', 'pa.saldo',
                 DB::raw("COALESCE(p.nombre, 'Paquete') as plan"))
-            ->get()
-            ->map(fn ($p) => array_merge((array) $p, [
-                'valor' => (float) $p->valor, 'saldo' => (float) $p->saldo, 'pagado' => (float) $p->valor - (float) $p->saldo,
-            ]));
+            ->get();
+        // Lo condonado baja el saldo sin ser un pago.
+        $condonadoPaquetes = DB::table('condonaciones')->whereIn('paquete_id', $paquetes->pluck('id'))
+            ->groupBy('paquete_id')->select('paquete_id', DB::raw('SUM(valor) as total'))->pluck('total', 'paquete_id');
+        $paquetes = $paquetes->map(fn ($p) => array_merge((array) $p, [
+            'valor' => (float) $p->valor, 'saldo' => (float) $p->saldo,
+            'pagado' => (float) $p->valor - (float) $p->saldo - (float) ($condonadoPaquetes[$p->id] ?? 0),
+        ]));
 
         $cargos = DB::table('cargos_mensuales as cm')
             ->join('curso_alumno as ca', 'ca.id', '=', 'cm.curso_alumno_id')
@@ -236,6 +239,19 @@ class Alumno extends Model
                     . "ELSE COALESCE(c.nombre, r.nombre, 'Pago') END as concepto"))
             ->get();
 
+        $condonaciones = DB::table('condonaciones as cd')
+            ->leftJoin('cursos as c', 'c.id', '=', 'cd.curso_id')
+            ->leftJoin('ritmos as r', 'r.id', '=', 'c.ritmo_id')
+            ->leftJoin('paquetes_alumno as pa', 'pa.id', '=', 'cd.paquete_id')
+            ->leftJoin('planes as pp', 'pp.id', '=', 'pa.plan_id')
+            ->where('cd.alumno_id', $id)
+            ->orderBy('cd.id', 'desc')
+            ->select('cd.id', 'cd.valor', 'cd.motivo', 'cd.usuario_creacion_nombre as usuario', DB::raw('DATE(cd.created_at) as fecha'),
+                DB::raw("CASE WHEN cd.paquete_id IS NOT NULL THEN CONCAT('Paquete ', COALESCE(pp.nombre, CONCAT('#', cd.paquete_id))) "
+                    . "ELSE COALESCE(c.nombre, r.nombre, 'Curso') END as concepto"))
+            ->get()
+            ->map(fn ($c) => array_merge((array) $c, ['valor' => (float) $c->valor]));
+
         $debeCursos = (float) $cursos->where('saldo', '>', 0)->sum('saldo');
         $debePaquetes = (float) $paquetes->where('saldo', '>', 0)->sum('saldo');
 
@@ -255,12 +271,14 @@ class Alumno extends Model
                 // Pagó de más en algún curso (saldo negativo).
                 'saldo_a_favor' => (float) abs($cursos->where('saldo', '<', 0)->sum('saldo')),
                 'total_pagado' => (float) $pagos->sum('monto'),
+                'total_condonado' => (float) $condonaciones->sum('valor'),
                 'ultimo_pago' => $pagos->first()?->fecha_pago,
             ],
             'cursos' => $cursos->values(),
             'paquetes' => $paquetes->values(),
             'cargos' => $cargos,
             'pagos' => $pagos,
+            'condonaciones' => $condonaciones,
         ];
     }
 

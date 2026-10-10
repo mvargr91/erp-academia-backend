@@ -16,7 +16,7 @@ use App\Models\Academia\Sede;
 use App\Services\Academia\Paquetes;
 use Illuminate\Support\Facades\Validator;
 
-/** Paquetes de clases comprados por los alumnos (para cursos grupales y clases privadas). */
+/** Paquetes de clases personalizadas comprados por los alumnos. */
 class PaqueteController extends Controller
 {
     private function consulta()
@@ -109,24 +109,20 @@ class PaqueteController extends Controller
     }
 
     /**
-     * Clases del paquete, para la planilla "una fila por clase": las que ya descontaron (grupales o
-     * personalizadas) y las personalizadas registradas aquí que no descuentan (programadas o canceladas
-     * a tiempo). `editable` = se registró desde el paquete y se puede corregir en la planilla.
+     * Clases del paquete, para la planilla "una fila por clase": las que ya descontaron y las
+     * registradas aquí que no descuentan (programadas o canceladas a tiempo).
+     * `editable` = se registró desde el paquete y se puede corregir en la planilla.
      */
     private function clasesDe(object $paquete)
     {
         $consumos = DB::table('consumos_paquete as c')
-            ->leftJoin('asistencias as s', 's.id', '=', 'c.asistencia_id')
-            ->leftJoin('cursos as cu', 'cu.id', '=', 's.curso_id')
-            ->leftJoin('ritmos as r', 'r.id', '=', 'cu.ritmo_id')
             ->leftJoin('clases_privadas as cp', 'cp.id', '=', 'c.clase_privada_id')
             ->leftJoin('clase_privada_alumno as cpa', fn ($j) => $j->on('cpa.clase_privada_id', '=', 'c.clase_privada_id')
                 ->on('cpa.alumno_id', '=', 'c.alumno_id'))
             ->leftJoin('profesores as p', 'p.id', '=', 'cp.profesor_id')
             ->where('c.paquete_id', $paquete->id)
             ->select('c.fecha', 'c.origen', 'c.motivo', 'c.clase_privada_id', 'cp.hora', 'cp.duracion_min', 'cp.profesor_id',
-                'cp.observacion', 'cpa.paquete_id as registrada_en', DB::raw("CONCAT(p.nombres,' ',p.apellidos) as profesor_nombre"),
-                DB::raw("COALESCE(cu.nombre, r.nombre) as curso"))
+                'cp.observacion', 'cpa.paquete_id as registrada_en', DB::raw("CONCAT(p.nombres,' ',p.apellidos) as profesor_nombre"))
             ->get()
             ->map(fn ($c) => [
                 'clase_id' => $c->clase_privada_id,
@@ -136,7 +132,6 @@ class PaqueteController extends Controller
                 'duracion_min' => $c->duracion_min,
                 'profesor_id' => $c->profesor_id,
                 'profesor_nombre' => $c->profesor_nombre,
-                'curso' => $c->curso,
                 'observacion' => $c->observacion,
                 'resultado' => $c->motivo === 'cancelacion_tardia' ? 'cancelo_tarde' : $c->motivo,
                 'descuenta' => true,
@@ -158,7 +153,6 @@ class PaqueteController extends Controller
                 'duracion_min' => $c->duracion_min,
                 'profesor_id' => $c->profesor_id,
                 'profesor_nombre' => $c->profesor_nombre,
-                'curso' => null,
                 'observacion' => $c->observacion,
                 'resultado' => $c->resultado === 'cancelo' ? 'cancelo_a_tiempo' : 'pendiente',
                 'descuenta' => false,

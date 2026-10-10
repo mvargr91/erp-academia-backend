@@ -15,7 +15,7 @@ class CatalogoConfiguracion
     {
         return [
             // Cobro a alumnos
-            'CLASES_POR_CICLO' => ['Clases por ciclo de pago cuando el plan no indica cuántas', 'numero', '4', 'Cobro a alumnos'],
+            'CLASES_POR_CICLO' => ['Clases que tiene cada ciclo de pago de un curso', 'numero', '4', 'Cobro a alumnos'],
             'DIAS_RECORDATORIO_PAGO' => ['Días antes del próximo ciclo para enviar el recordatorio de pago', 'numero', '5', 'Cobro a alumnos'],
             'DIAS_ENTRE_AVISOS_MORA' => ['Cada cuántos días se repite el aviso de mora', 'numero', '7', 'Cobro a alumnos'],
             // Clases personalizadas y paquetes

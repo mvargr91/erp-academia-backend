@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Academia;
 use Exception;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
-use App\Services\Academia\Paquetes;
 use App\Services\Academia\CalendarioCurso;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
@@ -105,34 +104,24 @@ class AsistenciaController extends Controller
         }
 
         $curso = DB::table('cursos as c')
-            ->leftJoin('planes as p', 'p.id', '=', 'c.plan_id')
             ->where('c.id', $request->curso_id)
-            ->select('c.id', 'c.sede_id', 'c.dia', 'c.fecha_inicio', 'p.num_clases', 'p.periodicidad')
+            ->select('c.id', 'c.sede_id', 'c.dia', 'c.fecha_inicio')
             ->first();
         $calendario = new CalendarioCurso();
         $fecha = Carbon::parse($request->fecha);
         $validacion = $calendario->validarFecha($curso, $fecha);
-        $clasesPorCiclo = CalendarioCurso::clasesPorCiclo($curso->num_clases);
+        $clasesPorCiclo = CalendarioCurso::clasesPorCiclo();
 
         $alumnos = DB::table('curso_alumno as ca')
             ->join('alumnos as a', 'a.id', '=', 'ca.alumno_id')
             ->where('ca.curso_id', $curso->id)
             ->where('ca.estado', 1)
             ->select('a.id as alumno_id', DB::raw("CONCAT(a.nombres,' ',a.apellidos) as nombre"),
-                'ca.fecha_matricula', 'ca.ciclo_inicio', 'ca.saldo', 'ca.modalidad')
+                'ca.fecha_matricula', 'ca.ciclo_inicio', 'ca.saldo')
             ->orderBy('a.nombres')
             ->get()
             ->map(function ($m) use ($calendario, $curso, $clasesPorCiclo, $fecha, $validacion) {
                 $numero = null;
-                if ($m->modalidad === 'paquete') {
-                    return [
-                        'alumno_id' => $m->alumno_id,
-                        'nombre' => $m->nombre,
-                        'modalidad' => 'paquete',
-                        'paquete' => Paquetes::disponiblesHoy($m->alumno_id),
-                        'saldo' => (float) $m->saldo,
-                    ];
-                }
                 if ($validacion['valida']) {
                     $ciclo = $calendario->ciclo($curso, $m, $clasesPorCiclo);
                     // Si la fecha ya pasó el ciclo registrado, se cuenta dentro del ciclo siguiente.
@@ -147,7 +136,6 @@ class AsistenciaController extends Controller
                     'nombre' => $m->nombre,
                     'clase_numero' => $numero,
                     'clases_ciclo' => $clasesPorCiclo,
-                    'modalidad' => 'ciclo',
                     'saldo' => (float) $m->saldo,
                 ];
             });
@@ -178,7 +166,6 @@ class AsistenciaController extends Controller
                         'nombre' => $a->nombre,
                         'clase_numero' => null,
                         'clases_ciclo' => $clasesPorCiclo,
-                        'modalidad' => 'ciclo',
                         'saldo' => 0.0,
                         'presente' => (bool) $marcados[$a->id],
                         'retirado' => true,
