@@ -38,6 +38,7 @@ class Sede extends Model
         'alumnos' => 'alumnos',
         'planes' => 'planes',
         'cierres_academia' => 'cierres',
+        'vacacional_cursos' => 'cursos vacacionales',
     ];
 
     private static $actual = false;

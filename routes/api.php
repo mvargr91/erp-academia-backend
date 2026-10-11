@@ -230,9 +230,9 @@ Route::group(['middleware' => ['auth:api']], function (){
 
     // Ritmos
     Route::group(["prefix" => "ritmos"], function () {
-        Route::get('/', [Academia\RitmoController::class, 'index'])->name('ritmos.index')->middleware(Permisos::lectura(['Ritmo', 'Curso']));
+        Route::get('/', [Academia\RitmoController::class, 'index'])->name('ritmos.index')->middleware(Permisos::lectura(['Ritmo', 'Curso', 'VacacionalCurso']));
         Route::post('/', [Academia\RitmoController::class, 'store'])->name('ritmos.store')->middleware('permission:CrearRitmo');
-        Route::get('/{id}', [Academia\RitmoController::class, 'show'])->name('ritmos.show')->middleware(Permisos::lectura(['Ritmo', 'Curso']));
+        Route::get('/{id}', [Academia\RitmoController::class, 'show'])->name('ritmos.show')->middleware(Permisos::lectura(['Ritmo', 'Curso', 'VacacionalCurso']));
         Route::put('/{id}', [Academia\RitmoController::class, 'update'])->name('ritmos.update')->middleware('permission:ModificarRitmo');
         Route::delete('/{id}', [Academia\RitmoController::class, 'destroy'])->name('ritmos.delete')->middleware('permission:EliminarRitmo');
     });
@@ -248,7 +248,7 @@ Route::group(['middleware' => ['auth:api']], function (){
 
     // Profesores
     Route::group(["prefix" => "profesores"], function () {
-        Route::get('/', [Academia\ProfesorController::class, 'index'])->name('profesores.index')->middleware(Permisos::lectura(['Profesor', 'Curso', 'ClasePrivada', 'Paquete'], ['RegistrarClasesPaquete']));
+        Route::get('/', [Academia\ProfesorController::class, 'index'])->name('profesores.index')->middleware(Permisos::lectura(['Profesor', 'Curso', 'ClasePrivada', 'Paquete', 'VacacionalCurso'], ['RegistrarClasesPaquete']));
         Route::post('/', [Academia\ProfesorController::class, 'store'])->name('profesores.store')->middleware('permission:CrearProfesor');
         Route::get('/{id}', [Academia\ProfesorController::class, 'show'])->name('profesores.show')->middleware(Permisos::lectura(['Profesor', 'Curso', 'ClasePrivada', 'Paquete']));
         Route::put('/{id}', [Academia\ProfesorController::class, 'update'])->name('profesores.update')->middleware('permission:ModificarProfesor');
@@ -305,6 +305,45 @@ Route::group(['middleware' => ['auth:api']], function (){
         Route::put('/{id}', [Academia\AsistenciaController::class, 'update'])->name('asistencias.update')->middleware('permission:ModificarAsistencia|ModificarTomaAsistencia');
         Route::delete('/{id}', [Academia\AsistenciaController::class, 'destroy'])->name('asistencias.delete')->middleware('permission:EliminarAsistencia');
     });
+
+    // ---------------------- Vacacionales -------------------------- //
+    // Público aparte de la academia: alumnos, cursos, inscripciones y pagos propios.
+
+    Route::group(["prefix" => "vacacionales-alumnos"], function () {
+        Route::get('/', [Academia\VacacionalAlumnoController::class, 'index'])->name('vacacionales-alumnos.index')->middleware(Permisos::lectura(['VacacionalAlumno', 'VacacionalInscripcion', 'VacacionalMatricula', 'EnvioCorreo'], ['InscribirVacacionalAlumno']));
+        Route::post('/', [Academia\VacacionalAlumnoController::class, 'store'])->name('vacacionales-alumnos.store')->middleware('permission:CrearVacacionalAlumno');
+        Route::get('/{id}', [Academia\VacacionalAlumnoController::class, 'show'])->name('vacacionales-alumnos.show')->middleware(Permisos::lectura(['VacacionalAlumno', 'VacacionalInscripcion']));
+        Route::put('/{id}', [Academia\VacacionalAlumnoController::class, 'update'])->name('vacacionales-alumnos.update')->middleware('permission:ModificarVacacionalAlumno');
+        Route::delete('/{id}', [Academia\VacacionalAlumnoController::class, 'destroy'])->name('vacacionales-alumnos.delete')->middleware('permission:EliminarVacacionalAlumno');
+    });
+
+    Route::group(["prefix" => "vacacionales-cursos"], function () {
+        Route::get('/', [Academia\VacacionalCursoController::class, 'index'])->name('vacacionales-cursos.index')->middleware(Permisos::lectura(['VacacionalCurso', 'VacacionalInscripcion', 'VacacionalMatricula', 'VacacionalAsistencia', 'VacacionalPago', 'EnvioCorreo'], ['InscribirVacacionalAlumno']));
+        Route::post('/', [Academia\VacacionalCursoController::class, 'store'])->name('vacacionales-cursos.store')->middleware('permission:CrearVacacionalCurso');
+        Route::get('/{id}', [Academia\VacacionalCursoController::class, 'show'])->name('vacacionales-cursos.show')->middleware(Permisos::lectura(['VacacionalCurso', 'VacacionalInscripcion', 'EnvioCorreo'], ['VerInscritosVacacionalCurso']));
+        Route::put('/{id}', [Academia\VacacionalCursoController::class, 'update'])->name('vacacionales-cursos.update')->middleware('permission:ModificarVacacionalCurso');
+        Route::delete('/{id}', [Academia\VacacionalCursoController::class, 'destroy'])->name('vacacionales-cursos.delete')->middleware('permission:EliminarVacacionalCurso');
+    });
+
+    Route::group(["prefix" => "vacacionales-inscripciones"], function () {
+        Route::get('/', [Academia\VacacionalInscripcionController::class, 'index'])->name('vacacionales-inscripciones.index')->middleware(Permisos::lectura(['VacacionalInscripcion', 'VacacionalMatricula'], ['VerInscritosVacacionalCurso']));
+        Route::post('/', [Academia\VacacionalInscripcionController::class, 'store'])->name('vacacionales-inscripciones.store')->middleware('permission:CrearVacacionalInscripcion|InscribirVacacionalAlumno');
+        Route::get('/{id}', [Academia\VacacionalInscripcionController::class, 'show'])->name('vacacionales-inscripciones.show')->middleware(Permisos::lectura(['VacacionalInscripcion'], ['PagarVacacionalInscripcion', 'VerInscripcionVacacionalPago']));
+        Route::put('/{id}', [Academia\VacacionalInscripcionController::class, 'update'])->name('vacacionales-inscripciones.update')->middleware('permission:ModificarVacacionalInscripcion');
+        // El pago es una opción aparte con su propio permiso (Pagar), como en los paquetes.
+        Route::post('/{id}/pagos', [Academia\VacacionalInscripcionController::class, 'registrarPago'])->name('vacacionales-inscripciones.pagos.store')->middleware('permission:PagarVacacionalInscripcion');
+        Route::delete('/{id}/pagos/{pagoId}', [Academia\VacacionalInscripcionController::class, 'eliminarPago'])->name('vacacionales-inscripciones.pagos.delete')->middleware('permission:PagarVacacionalInscripcion');
+        Route::delete('/{id}', [Academia\VacacionalInscripcionController::class, 'destroy'])->name('vacacionales-inscripciones.delete')->middleware('permission:EliminarVacacionalInscripcion');
+    });
+
+    // Matrícula rápida de vacacionales: alumno + cursos (con sus clases) + pago en un solo paso
+    Route::post('vacacionales-matriculas', [Academia\VacacionalInscripcionController::class, 'matricular'])->name('vacacionales-matriculas.store')->middleware('permission:CrearVacacionalMatricula');
+
+    // Toma de asistencia de vacacionales (opción propia, aparte de la asistencia de la academia)
+    Route::get('vacacionales-asistencia', [Academia\VacacionalAsistenciaController::class, 'index'])->name('vacacionales-asistencia.index')->middleware(Permisos::lectura(['VacacionalAsistencia']));
+    Route::put('vacacionales-asistencia', [Academia\VacacionalAsistenciaController::class, 'update'])->name('vacacionales-asistencia.update')->middleware('permission:CrearVacacionalAsistencia|ModificarVacacionalAsistencia');
+
+    Route::get('vacacionales-pagos', [Academia\VacacionalPagoController::class, 'index'])->name('vacacionales-pagos.index')->middleware('permission:ListarVacacionalPago');
 
     // Dashboard de academia
     Route::get('academia/dashboard', [Academia\DashboardController::class, 'index'])->name('academia.dashboard')->middleware('permission:ListarDashboardAcademia');

@@ -43,7 +43,17 @@ class AcademiaMenuSeeder extends Seeder
             ['Envíos de correo', '/envios-correo', 'campaign', 'EnvioCorreo', ['Exportar' => 'Listar']],
             ['Pagos', '/pagos', 'payments', 'Pago', ['Condonar', 'Exportar' => 'Listar']],
         ]],
-        'Configuración Academia' => ['settings', 6, [
+        // Público aparte: nada de esto se mezcla con alumnos, cursos ni pagos de la academia.
+        'Vacacionales' => ['beach_access', 6, [
+            // Cada botón de una opción tiene su permiso propio: Inscribir, VerInscritos, Anunciar, Pagar, VerInscripcion.
+            ['Alumnos vacacionales', '/vacacionales-alumnos', 'child_care', 'VacacionalAlumno', ['Inscribir', 'Exportar' => 'Listar']],
+            ['Matrícula rápida vacacional', '/vacacionales-matriculas', 'bolt', 'VacacionalMatricula'],
+            ['Cursos vacacionales', '/vacacionales-cursos', 'event_available', 'VacacionalCurso', ['VerInscritos', 'Anunciar', 'Exportar' => 'Listar']],
+            ['Tomar asistencia vacacional', '/vacacionales-asistencia', 'checklist', 'VacacionalAsistencia'],
+            ['Inscripciones', '/vacacionales-inscripciones', 'how_to_reg', 'VacacionalInscripcion', ['Pagar', 'Exportar' => 'Listar']],
+            ['Pagos vacacionales', '/vacacionales-pagos', 'payments', 'VacacionalPago', ['VerInscripcion', 'Exportar' => 'Listar']],
+        ]],
+        'Configuración Academia' => ['settings', 7, [
             ['Sedes', '/sedes', 'store', 'Sede', ['Exportar' => 'Listar']],
             ['Ritmos', '/ritmos', 'music_note', 'Ritmo', ['Exportar' => 'Listar']],
             ['Tarifas', '/tarifas', 'price_change', 'Tarifa'],

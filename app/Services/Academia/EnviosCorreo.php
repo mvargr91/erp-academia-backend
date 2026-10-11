@@ -21,6 +21,8 @@ class EnviosCorreo
         'curso' => 'Alumnos de un curso',
         'mora' => 'Alumnos con saldo pendiente',
         'seleccion' => 'Alumnos seleccionados',
+        'vacacionales' => 'Vacacionales: todos los alumnos',
+        'vacacional_curso' => 'Vacacionales: inscritos a un curso',
         'academias' => 'Mis academias clientes',
     ];
 
@@ -62,6 +64,30 @@ class EnviosCorreo
                         'curso' => '',
                     ],
                 ]);
+        }
+
+        // Público de vacacionales (tabla propia): para anunciar los próximos o escribir a los inscritos de uno.
+        if (in_array($audiencia, ['vacacionales', 'vacacional_curso'])) {
+            $saldos = DB::table('vacacional_inscripciones')->where('estado', 1)->groupBy('alumno_id')
+                ->select('alumno_id', DB::raw('SUM(saldo) as saldo'))->pluck('saldo', 'alumno_id');
+            $query = DB::table('vacacional_alumnos as a')->where('a.estado', 1);
+            $curso = '';
+            if ($audiencia === 'vacacional_curso') {
+                $cursoId = $filtro['vacacional_curso_id'] ?? 0;
+                $curso = DB::table('vacacional_cursos')->where('id', $cursoId)->value('nombre') ?? '';
+                $query->whereIn('a.id', DB::table('vacacional_inscripciones')->where('curso_id', $cursoId)->where('estado', 1)->select('alumno_id'));
+            }
+            return $query->orderBy('a.nombres')->get()->map(fn ($a) => [
+                'alumno_id' => null, // no es un alumno de la academia
+                'nombre' => trim("{$a->nombres} {$a->apellidos}"),
+                'correo' => $a->correo,
+                'variables' => [
+                    'alumno' => trim("{$a->nombres} {$a->apellidos}"),
+                    'academia' => $nombreAcademia,
+                    'saldo' => self::dinero((float) ($saldos[$a->id] ?? 0)),
+                    'curso' => $curso,
+                ],
+            ]);
         }
 
         // Saldo pendiente de cada alumno sumando sus matrículas.

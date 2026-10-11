@@ -80,6 +80,7 @@ class EnvioCorreoController extends Controller
         return [
             'audiencia' => 'required|in:' . implode(',', array_keys($this->audienciasPermitidas())),
             'curso_id' => 'required_if:audiencia,curso|nullable|integer|exists:cursos,id',
+            'vacacional_curso_id' => 'required_if:audiencia,vacacional_curso|nullable|integer|exists:vacacional_cursos,id',
             'alumnos' => 'required_if:audiencia,seleccion|array',
             'alumnos.*' => 'integer',
         ];
@@ -87,7 +88,11 @@ class EnvioCorreoController extends Controller
 
     private function filtro(Request $request): array
     {
-        return array_filter(['curso_id' => $request->curso_id, 'alumnos' => $request->alumnos ?: null]);
+        return array_filter([
+            'curso_id' => $request->curso_id,
+            'vacacional_curso_id' => $request->vacacional_curso_id,
+            'alumnos' => $request->alumnos ?: null,
+        ]);
     }
 
     /** Cuántos recibirán el correo, quiénes no tienen correo y si se supera el límite diario. */
@@ -95,6 +100,7 @@ class EnvioCorreoController extends Controller
     {
         $validator = Validator::make($request->all(), $this->reglas(), [
             'curso_id.required_if' => 'Elige el curso.',
+            'vacacional_curso_id.required_if' => 'Elige el curso vacacional.',
             'alumnos.required_if' => 'Elige al menos un alumno.',
         ]);
         if ($validator->fails()) {
@@ -111,6 +117,7 @@ class EnvioCorreoController extends Controller
             'texto' => 'required|string',
         ]), [
             'curso_id.required_if' => 'Elige el curso.',
+            'vacacional_curso_id.required_if' => 'Elige el curso vacacional.',
             'alumnos.required_if' => 'Elige al menos un alumno.',
         ]);
         if ($validator->fails()) {
