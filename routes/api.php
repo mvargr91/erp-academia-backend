@@ -276,6 +276,8 @@ Route::group(['middleware' => ['auth:api']], function (){
         Route::get('/', [Academia\CursoController::class, 'index'])->name('cursos.index')->middleware(Permisos::lectura(['Curso', 'Pago', 'Asistencia', 'TomaAsistencia', 'Matricula', 'EnvioCorreo']));
         Route::post('/', [Academia\CursoController::class, 'store'])->name('cursos.store')->middleware('permission:CrearCurso');
         Route::get('/{id}/calendario', [Academia\CalendarioController::class, 'curso'])->name('cursos.calendario')->middleware(Permisos::lectura(['Curso']));
+        Route::post('/{id}/festivos-habilitados', [Academia\CalendarioController::class, 'habilitarFestivo'])->name('cursos.festivos.habilitar')->middleware('permission:ModificarCurso');
+        Route::delete('/{id}/festivos-habilitados/{fecha}', [Academia\CalendarioController::class, 'deshabilitarFestivo'])->name('cursos.festivos.deshabilitar')->middleware('permission:ModificarCurso');
         Route::put('/{id}/alumnos/{alumnoId}/valor-especial', [Academia\CalendarioController::class, 'valorEspecial'])->name('cursos.valor-especial')->middleware('permission:ValorEspecialCurso');
         Route::put('/{id}/alumnos/{alumnoId}/pareja', [Academia\CalendarioController::class, 'pareja'])->name('cursos.pareja')->middleware('permission:FormaDePagoCurso');
         Route::get('/{id}', [Academia\CursoController::class, 'show'])->name('cursos.show')->middleware(Permisos::lectura(['Curso', 'Pago', 'Asistencia', 'TomaAsistencia', 'Matricula', 'EnvioCorreo']));

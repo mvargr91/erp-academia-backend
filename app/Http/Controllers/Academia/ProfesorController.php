@@ -55,11 +55,11 @@ class ProfesorController extends Controller
                 'apellidos' => 'string|required|max:100',
                 'documento' => 'string|nullable|max:30',
                 'telefono' => 'string|nullable|max:30',
-                'correo' => 'email|nullable|max:150',
+                'correo' => 'email|required|max:150',
                 'especialidad' => 'string|nullable|max:150',
                 'estado' => 'boolean|required',
-            ]);
-            CorreoUnico::validar($validator, 'profesores', $datos['correo'] ?? null);
+            ], ['correo.required' => 'El correo es obligatorio.', 'correo.email' => 'El correo no es válido.']);
+            CorreoUnico::validarPersona($validator, 'profesores', $datos);
 
             if ($validator->fails()) {
                 return response(
@@ -120,11 +120,11 @@ class ProfesorController extends Controller
                 'apellidos' => 'string|required|max:100',
                 'documento' => 'string|nullable|max:30',
                 'telefono' => 'string|nullable|max:30',
-                'correo' => 'email|nullable|max:150',
+                'correo' => 'email|required|max:150',
                 'especialidad' => 'string|nullable|max:150',
                 'estado' => 'boolean|required',
-            ]);
-            CorreoUnico::validar($validator, 'profesores', $datos['correo'] ?? null, (int) $id);
+            ], ['correo.required' => 'El correo es obligatorio.', 'correo.email' => 'El correo no es válido.']);
+            CorreoUnico::validarPersona($validator, 'profesores', $datos, (int) $id);
 
             if ($validator->fails()) {
                 return response(

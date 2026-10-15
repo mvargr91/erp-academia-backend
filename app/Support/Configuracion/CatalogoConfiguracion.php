@@ -18,6 +18,8 @@ class CatalogoConfiguracion
             'CLASES_POR_CICLO' => ['Clases que tiene cada ciclo de pago de un curso', 'numero', '4', 'Cobro a alumnos'],
             'DIAS_RECORDATORIO_PAGO' => ['Días antes del próximo ciclo para enviar el recordatorio de pago', 'numero', '5', 'Cobro a alumnos'],
             'DIAS_ENTRE_AVISOS_MORA' => ['Cada cuántos días se repite el aviso de mora', 'numero', '7', 'Cobro a alumnos'],
+            // Calendario
+            'DICTA_FESTIVOS' => ['La academia dicta clases los festivos (SI: las clases no se corren; NO: se corren a la semana siguiente)', 'si_no', 'NO', 'Calendario'],
             // Clases personalizadas y paquetes
             'HORAS_CANCELACION_CLASE' => ['Horas mínimas de anticipación para cancelar una clase privada sin que descuente', 'numero', '24', 'Clases personalizadas'],
             'DIAS_AVISO_VENCE_PAQUETE' => ['Días antes del vencimiento de un paquete para avisar al alumno', 'numero', '5', 'Paquetes'],

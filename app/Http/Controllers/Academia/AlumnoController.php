@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
+use App\Models\Academia\Sede;
 use App\Support\CorreoUnico;
 use App\Models\Academia\Alumno;
 use Illuminate\Support\Facades\Validator;
@@ -49,21 +50,22 @@ class AlumnoController extends Controller
         DB::beginTransaction();
         try {
             $datos = $request->all();
+            $datos['sede_id'] = Sede::resolver($datos['sede_id'] ?? null);
             $validator = Validator::make($datos, [
                 'usuario_id' => 'integer|nullable|exists:usuarios,id',
-                'sede_id' => 'integer|nullable|exists:sedes,id',
+                'sede_id' => 'integer|required|exists:sedes,id',
                 'nombres' => 'string|required|max:100',
                 'apellidos' => 'string|required|max:100',
                 'documento' => 'string|nullable|max:30',
                 'telefono' => 'string|nullable|max:30',
-                'correo' => 'email|nullable|max:150',
+                'correo' => 'email|required|max:150',
                 'fecha_nacimiento' => 'date|nullable',
                 'direccion' => 'string|nullable|max:255',
                 'contacto_emergencia' => 'string|nullable|max:150',
                 'telefono_emergencia' => 'string|nullable|max:30',
                 'estado' => 'boolean|required',
-            ]);
-            CorreoUnico::validar($validator, 'alumnos', $datos['correo'] ?? null);
+            ], ['correo.required' => 'El correo es obligatorio.', 'correo.email' => 'El correo no es válido.', 'sede_id.required' => 'Elige la sede del alumno.']);
+            CorreoUnico::validarPersona($validator, 'alumnos', $datos);
 
             if ($validator->fails()) {
                 return response(
@@ -125,23 +127,24 @@ class AlumnoController extends Controller
         DB::beginTransaction();
         try {
             $datos = $request->all();
+            $datos['sede_id'] = Sede::resolver($datos['sede_id'] ?? null);
             $datos['id'] = $id;
             $validator = Validator::make($datos, [
                 'id' => 'integer|required|exists:alumnos,id',
                 'usuario_id' => 'integer|nullable|exists:usuarios,id',
-                'sede_id' => 'integer|nullable|exists:sedes,id',
+                'sede_id' => 'integer|required|exists:sedes,id',
                 'nombres' => 'string|required|max:100',
                 'apellidos' => 'string|required|max:100',
                 'documento' => 'string|nullable|max:30',
                 'telefono' => 'string|nullable|max:30',
-                'correo' => 'email|nullable|max:150',
+                'correo' => 'email|required|max:150',
                 'fecha_nacimiento' => 'date|nullable',
                 'direccion' => 'string|nullable|max:255',
                 'contacto_emergencia' => 'string|nullable|max:150',
                 'telefono_emergencia' => 'string|nullable|max:30',
                 'estado' => 'boolean|required',
-            ]);
-            CorreoUnico::validar($validator, 'alumnos', $datos['correo'] ?? null, (int) $id);
+            ], ['correo.required' => 'El correo es obligatorio.', 'correo.email' => 'El correo no es válido.', 'sede_id.required' => 'Elige la sede del alumno.']);
+            CorreoUnico::validarPersona($validator, 'alumnos', $datos, (int) $id);
 
             if ($validator->fails()) {
                 return response(

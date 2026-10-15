@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\DB;
  *
  * Una fecha es "de clase" si cae en el día del curso, desde su fecha de inicio, y no es
  * festivo nacional (BD central) ni cierre de la academia (general o de la sede del curso).
+ * Los festivos no cuentan si la academia los dicta (parámetro DICTA_FESTIVOS) o si el curso
+ * habilitó esa fecha (curso_festivos_habilitados); los cierres siempre cuentan.
  * Las semanas no lectivas no cuentan:
  * el ciclo de N clases del alumno termina una semana después por cada una ("la clase se corre").
  * Todo se calcula al vuelo, así que agregar un festivo o un cierre corrige los ciclos solo.
@@ -23,6 +25,8 @@ class CalendarioCurso
     private array $noLectivos = [];
     /** @var array<string, array<int, string>> Cierres por fecha: sede (0 = todas) => motivo. */
     private array $cierres = [];
+    /** @var array<string, array<int, true>> Festivos habilitados por fecha: curso => true. */
+    private array $habilitados = [];
     private ?string $cargadoDesde = null;
     private ?string $cargadoHasta = null;
 
@@ -47,9 +51,16 @@ class CalendarioCurso
         }
         $this->noLectivos = [];
         $this->cierres = [];
+        $this->habilitados = [];
 
-        foreach (DB::connection('central')->table('festivos')->whereBetween('fecha', [$desdeTxt, $hastaTxt])->get() as $f) {
-            $this->noLectivos[$f->fecha] = ['tipo' => 'festivo', 'motivo' => $f->nombre];
+        if (!Configuracion::siNo('DICTA_FESTIVOS', false)) {
+            foreach (DB::connection('central')->table('festivos')->whereBetween('fecha', [$desdeTxt, $hastaTxt])->get() as $f) {
+                $this->noLectivos[$f->fecha] = ['tipo' => 'festivo', 'motivo' => $f->nombre];
+            }
+            $habilitados = DB::table('curso_festivos_habilitados')->whereBetween('fecha', [$desdeTxt, $hastaTxt])->get();
+            foreach ($habilitados as $h) {
+                $this->habilitados[$h->fecha][(int) $h->curso_id] = true;
+            }
         }
         $cierres = DB::table('cierres_academia')
             ->where('fecha_desde', '<=', $hastaTxt)
@@ -66,14 +77,17 @@ class CalendarioCurso
         $this->cargadoHasta = $hastaTxt;
     }
 
-    /** Festivo o cierre (general o de la sede) de una fecha ya cargada, o null. */
-    private function noLectivoEn(string $fecha, ?int $sedeId): ?array
+    /** Cierre (general o de la sede) o festivo no habilitado para el curso, de una fecha ya cargada, o null. */
+    private function noLectivoEn(string $fecha, ?int $sedeId, ?int $cursoId = null): ?array
     {
-        if (isset($this->noLectivos[$fecha])) {
+        $motivo = $this->cierres[$fecha][0] ?? ($sedeId ? ($this->cierres[$fecha][$sedeId] ?? null) : null);
+        if ($motivo !== null) {
+            return ['tipo' => 'cierre', 'motivo' => $motivo];
+        }
+        if (isset($this->noLectivos[$fecha]) && !($cursoId && isset($this->habilitados[$fecha][$cursoId]))) {
             return $this->noLectivos[$fecha];
         }
-        $motivo = $this->cierres[$fecha][0] ?? ($sedeId ? ($this->cierres[$fecha][$sedeId] ?? null) : null);
-        return $motivo !== null ? ['tipo' => 'cierre', 'motivo' => $motivo] : null;
+        return null;
     }
 
     private static function sedeDe(object $curso): ?int
@@ -81,11 +95,29 @@ class CalendarioCurso
         return isset($curso->sede_id) ? (int) $curso->sede_id : null;
     }
 
-    /** Festivo o cierre de una fecha en una sede (para clases fuera del calendario de un curso), o null. */
-    public function noLectivo(Carbon $fecha, ?int $sedeId = null): ?array
+    /** Id del curso: llega como curso (id) o como fila de matrícula (curso_id). */
+    private static function cursoDe(object $curso): ?int
+    {
+        $id = $curso->curso_id ?? $curso->id ?? null;
+        return $id ? (int) $id : null;
+    }
+
+    /**
+     * Cierre de la academia en una fecha y sede, o null. Para clases fuera del calendario de un
+     * curso (personalizadas, paquetes): esas sí se pueden dar en festivo porque se agendan a mano.
+     */
+    public function cierreEn(Carbon $fecha, ?int $sedeId = null): ?string
     {
         $this->cargarNoLectivos($fecha, $fecha);
-        return $this->noLectivoEn($fecha->toDateString(), $sedeId);
+        $no = $this->noLectivoEn($fecha->toDateString(), $sedeId);
+        return ($no && $no['tipo'] === 'cierre') ? $no['motivo'] : null;
+    }
+
+    /** Nombre del festivo de una fecha si la academia descansa los festivos, o null. */
+    public function festivoEn(Carbon $fecha): ?string
+    {
+        $this->cargarNoLectivos($fecha, $fecha);
+        return $this->noLectivos[$fecha->toDateString()]['motivo'] ?? null;
     }
 
     /** Primera fecha >= $desde que cae en el día del curso (0 = domingo … 6 = sábado). */
@@ -103,18 +135,22 @@ class CalendarioCurso
 
     /**
      * Semanas del curso entre dos fechas, con su estado.
-     * @return array<int, array{fecha: string, estado: string, motivo: ?string}>  estado: clase | festivo | cierre
+     * festivo_habilitado: nombre del festivo cuando el curso sí dicta clase ese día.
+     * @return array<int, array{fecha: string, estado: string, motivo: ?string, festivo_habilitado: ?string}>  estado: clase | festivo | cierre
      */
     public function semanas(object $curso, Carbon $desde, Carbon $hasta): array
     {
         $this->cargarNoLectivos($desde, $hasta);
+        $cursoId = self::cursoDe($curso);
         $resultado = [];
         for ($f = self::primerDiaDeCurso($curso, $desde); $f->lte($hasta); $f->addWeek()) {
-            $no = $this->noLectivoEn($f->toDateString(), self::sedeDe($curso));
+            $fecha = $f->toDateString();
+            $no = $this->noLectivoEn($fecha, self::sedeDe($curso), $cursoId);
             $resultado[] = [
-                'fecha' => $f->toDateString(),
+                'fecha' => $fecha,
                 'estado' => $no['tipo'] ?? 'clase',
                 'motivo' => $no['motivo'] ?? null,
+                'festivo_habilitado' => $no ? null : ($this->noLectivos[$fecha]['motivo'] ?? null),
             ];
         }
         return $resultado;
@@ -130,7 +166,7 @@ class CalendarioCurso
             if ($f->toDateString() > $this->cargadoHasta) {
                 $this->cargarNoLectivos($f, $f->copy()->addWeeks(52));
             }
-            if (!$this->noLectivoEn($f->toDateString(), self::sedeDe($curso))) {
+            if (!$this->noLectivoEn($f->toDateString(), self::sedeDe($curso), self::cursoDe($curso))) {
                 $clases[] = $f->copy();
             }
         }
@@ -155,13 +191,14 @@ class CalendarioCurso
             return ['valida' => false, 'motivo' => 'El curso no tiene clase ese día: sus clases son los ' . $dias[(int) $curso->dia] . '.', 'sugerida' => $sugerida];
         }
         $this->cargarNoLectivos($fecha, $fecha->copy()->addWeeks(30));
-        $no = $this->noLectivoEn($fecha->toDateString(), self::sedeDe($curso));
+        $no = $this->noLectivoEn($fecha->toDateString(), self::sedeDe($curso), self::cursoDe($curso));
         if ($no) {
             $tipo = $no['tipo'] === 'festivo' ? 'es festivo' : 'la academia está cerrada';
             return [
                 'valida' => false,
                 'motivo' => "El {$fecha->format('d/m/Y')} {$tipo} ({$no['motivo']}): la clase se corre al "
-                    . ($siguiente ? $siguiente->format('d/m/Y') : 'siguiente semana disponible') . '.',
+                    . ($siguiente ? $siguiente->format('d/m/Y') : 'siguiente semana disponible') . '.'
+                    . ($no['tipo'] === 'festivo' ? ' Si el curso sí tiene clase ese día, habilítalo en el calendario del curso.' : ''),
                 'sugerida' => $sugerida,
             ];
         }

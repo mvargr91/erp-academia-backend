@@ -17,7 +17,7 @@ use App\Support\Configuracion\Configuracion;
  */
 class ParametroController extends Controller
 {
-    private const TIPOS = ['numero' => 'Número', 'porcentaje' => 'Porcentaje', 'texto' => 'Texto'];
+    private const TIPOS = ['numero' => 'Número', 'porcentaje' => 'Porcentaje', 'texto' => 'Texto', 'si_no' => 'Sí / No'];
 
     private function formatear(object $p): array
     {
@@ -75,11 +75,13 @@ class ParametroController extends Controller
         $regla = match ($parametro->tipo) {
             'numero' => 'required|numeric|min:0',
             'porcentaje' => 'required|numeric|between:0,100',
+            'si_no' => 'required|in:SI,NO',
             default => 'nullable|string|max:2000',
         };
         $validator = Validator::make($request->all(), ['valor' => $regla], [
             'valor.between' => 'El porcentaje debe estar entre 0 y 100.',
             'valor.numeric' => 'Debe ser un número.',
+            'valor.in' => 'Elige Sí o No.',
         ]);
         if ($validator->fails()) {
             return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);

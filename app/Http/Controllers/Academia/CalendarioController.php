@@ -7,10 +7,12 @@ use DomainException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\Academia\Curso;
 use Illuminate\Support\Facades\Validator;
 use App\Services\Academia\CalendarioCurso;
+use App\Support\Configuracion\Configuracion;
 
 /** Calendario de clases de un curso con sus festivos y cierres. */
 class CalendarioController extends Controller
@@ -51,8 +53,58 @@ class CalendarioController extends Controller
                 'clases_por_ciclo' => $clasesPorCiclo,
                 'fecha_inicio' => $curso->fecha_inicio,
             ],
+            'dicta_festivos' => Configuracion::siNo('DICTA_FESTIVOS', false),
             'semanas' => $lista,
         ], Response::HTTP_OK);
+    }
+
+    /**
+     * El curso sí dicta clase en un festivo: { fecha }. Esa fecha cuenta como clase del ciclo
+     * (no se corre), así que el ciclo de los alumnos y su próximo pago se recalculan.
+     */
+    public function habilitarFestivo(Request $request, $id)
+    {
+        $validator = Validator::make($request->all(), ['fecha' => 'required|date']);
+        if ($validator->fails()) {
+            return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+        }
+        $curso = DB::table('cursos')->where('id', $id)->first();
+        if (!$curso) {
+            return response(get_response_body(['El curso no existe.']), Response::HTTP_NOT_FOUND);
+        }
+        $fecha = Carbon::parse($request->fecha)->startOfDay();
+        if ($fecha->dayOfWeek !== (int) $curso->dia) {
+            return response(get_response_body(['El curso no tiene clase ese día.']), Response::HTTP_BAD_REQUEST);
+        }
+        $festivo = (new CalendarioCurso())->festivoEn($fecha);
+        if (!$festivo) {
+            return response(get_response_body(['Esa fecha no es festivo: el curso ya tiene clase ese día.']), Response::HTTP_BAD_REQUEST);
+        }
+
+        $usuario = Auth::user()->usuario();
+        DB::table('curso_festivos_habilitados')->insertOrIgnore([
+            'curso_id' => $curso->id,
+            'fecha' => $fecha->toDateString(),
+            'usuario_creacion_id' => $usuario->id,
+            'usuario_creacion_nombre' => $usuario->nombre,
+            'created_at' => Carbon::now(),
+            'updated_at' => Carbon::now(),
+        ]);
+        return response(get_response_body(["El curso tendrá clase el {$fecha->format('d/m/Y')} ({$festivo}). "
+            . 'Esa clase cuenta en el ciclo de los alumnos.', 1]), Response::HTTP_OK);
+    }
+
+    /** El curso vuelve a descansar en ese festivo (la clase se corre a la semana siguiente). */
+    public function deshabilitarFestivo($id, $fecha)
+    {
+        $fecha = Carbon::parse($fecha)->toDateString();
+        if (DB::table('asistencias')->where('curso_id', $id)->where('fecha_sesion', $fecha)->exists()) {
+            return response(get_response_body(['Ya se tomó asistencia en esa fecha: elimina la asistencia antes de quitar la clase.']),
+                Response::HTTP_CONFLICT);
+        }
+        DB::table('curso_festivos_habilitados')->where('curso_id', $id)->where('fecha', $fecha)->delete();
+        return response(get_response_body(['El festivo vuelve a ser día sin clase: la clase se corre a la semana siguiente.', 1]),
+            Response::HTTP_OK);
     }
 
     /**

@@ -189,9 +189,8 @@ class PaqueteController extends Controller
         }
         $fecha = Carbon::parse($request->fecha);
         $sedeId = $paquete->sede_id ?: Sede::porDefecto();
-        if ($noLectivo = (new CalendarioCurso())->noLectivo($fecha, (int) $sedeId)) {
-            $tipo = $noLectivo['tipo'] === 'festivo' ? 'es festivo' : 'la academia está cerrada';
-            return response(get_response_body([$fecha->format('d/m/Y') . " {$tipo} ({$noLectivo['motivo']})."]), Response::HTTP_BAD_REQUEST);
+        if ($cierre = (new CalendarioCurso())->cierreEn($fecha, (int) $sedeId)) {
+            return response(get_response_body([$fecha->format('d/m/Y') . " la academia está cerrada ({$cierre})."]), Response::HTTP_BAD_REQUEST);
         }
 
         try {

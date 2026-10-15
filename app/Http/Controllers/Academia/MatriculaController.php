@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
+use App\Models\Academia\Sede;
 use App\Support\CorreoUnico;
 use App\Services\Academia\Matriculas;
 use Illuminate\Support\Facades\Validator;
@@ -70,14 +71,17 @@ class MatriculaController extends Controller
         DB::beginTransaction();
         try {
             $datos = $request->all();
+            if (empty($datos['alumno_id']) && is_array($datos['alumno'] ?? null)) {
+                $datos['alumno']['sede_id'] = Sede::resolver($datos['alumno']['sede_id'] ?? null);
+            }
             $validator = Validator::make($datos, array_merge($this->reglasCursos(), [
                 'alumno' => 'array|nullable|required_without:alumno_id',
-                'alumno.sede_id' => 'integer|nullable|exists:sedes,id',
+                'alumno.sede_id' => 'integer|required_without:alumno_id|exists:sedes,id',
                 'alumno.nombres' => 'string|required_without:alumno_id|max:100',
                 'alumno.apellidos' => 'string|required_without:alumno_id|max:100',
                 'alumno.documento' => 'string|nullable|max:30',
                 'alumno.telefono' => 'string|nullable|max:30',
-                'alumno.correo' => 'email|nullable|max:150',
+                'alumno.correo' => 'email|required_without:alumno_id|max:150',
                 'alumno.fecha_nacimiento' => 'date|nullable',
                 'alumno.direccion' => 'string|nullable|max:255',
                 'alumno.contacto_emergencia' => 'string|nullable|max:150',
@@ -91,7 +95,7 @@ class MatriculaController extends Controller
                 'pago.observacion' => 'string|nullable',
             ]), [], self::ATRIBUTOS);
             if (empty($datos['alumno_id'])) {
-                CorreoUnico::validar($validator, 'alumnos', $datos['alumno']['correo'] ?? null, null, 'alumno.correo');
+                CorreoUnico::validarPersona($validator, 'alumnos', $datos['alumno'] ?? [], null, 'alumno.');
             }
             if ($validator->fails()) {
                 DB::rollback();

@@ -259,10 +259,8 @@ class ClasePrivadaController extends Controller
         if ($error = $this->errorDeCobro($request)) {
             return [$error];
         }
-        $noLectivo = (new CalendarioCurso())->noLectivo(Carbon::parse($request->fecha), (int) $request->sede_id);
-        if ($noLectivo) {
-            $tipo = $noLectivo['tipo'] === 'festivo' ? 'es festivo' : 'la academia está cerrada';
-            return [Carbon::parse($request->fecha)->format('d/m/Y') . " {$tipo} ({$noLectivo['motivo']})."];
+        if ($cierre = (new CalendarioCurso())->cierreEn(Carbon::parse($request->fecha), (int) $request->sede_id)) {
+            return [Carbon::parse($request->fecha)->format('d/m/Y') . " la academia está cerrada ({$cierre})."];
         }
         return null;
     }

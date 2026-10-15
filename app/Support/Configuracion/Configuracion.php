@@ -41,6 +41,12 @@ class Configuracion
         return is_numeric($valor) ? (int) $valor : $defecto;
     }
 
+    /** Parámetro de tipo si_no ('SI' / 'NO'). */
+    public static function siNo(string $codigo, bool $defecto, ?string $conexion = null): bool
+    {
+        return strtoupper(trim((string) self::parametro($codigo, $defecto ? 'SI' : 'NO', $conexion))) === 'SI';
+    }
+
     /** Parámetro de la academia administradora (cobro del ERP), esté activa o no. */
     public static function parametroAdministradora(string $codigo, $defecto = null)
     {
