@@ -16,6 +16,7 @@ class AcademiaMenuRollbackSeeder extends Seeder
 {
     private const MODULOS_A_QUITAR = [
         'Academia',
+        'Exportes',
         'Vacacionales',
         'Configuración Academia',
     ];

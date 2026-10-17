@@ -40,7 +40,9 @@ class Matriculas
             ->leftJoin('sedes as s', 's.id', '=', 'c.sede_id')
             ->whereIn('c.id', $cursoIds)
             ->select(
-                'c.id', 'c.cupo_max', 'c.activo', 'c.estado', 's.nombre as sede',
+                'c.id', 'c.cupo_max', 'c.activo', 'c.estado', 'c.modalidad_id', 's.nombre as sede',
+                // Para la primera clase (CalendarioCurso): en una mensualidad el primer mes es proporcional.
+                'c.sede_id', 'c.dia', 'c.fecha_inicio',
                 DB::raw("CONCAT(COALESCE(c.nombre, r.nombre), ' - ', DATE_FORMAT(c.hora, '%H:%i')) as curso"),
                 DB::raw('(SELECT COUNT(*) FROM curso_alumno WHERE curso_alumno.curso_id = c.id AND curso_alumno.estado = 1) as matriculados'),
             )
@@ -50,8 +52,9 @@ class Matriculas
         $yaMatriculado = $alumnoId
             ? DB::table('curso_alumno')->where('alumno_id', $alumnoId)->whereIn('curso_id', $cursoIds)->pluck('curso_id')->all()
             : [];
-        // Cursos que el alumno ya paga por ciclo: los nuevos siguen después de esos.
-        $porCiclo = $alumnoId ? count(Tarifas::matriculasPorCiclo($alumnoId)) : 0;
+        // Cursos que el alumno ya paga por ciclo en cada modalidad: los nuevos siguen después de esos.
+        $porCiclo = [];
+        $calendario = new CalendarioCurso();
 
         $filas = [];
         foreach ($cursoIds as $id) {
@@ -67,13 +70,19 @@ class Matriculas
                 'ya_matriculado' => in_array($c->id, $yaMatriculado),
                 'cupo_disponible' => $c->cupo_max === null ? null : max(0, (int) $c->cupo_max - (int) $c->matriculados),
             ];
+            $modalidadId = (int) $c->modalidad_id;
+            $porCiclo[$modalidadId] ??= $alumnoId ? count(Tarifas::matriculasPorCiclo($alumnoId, $modalidadId)) : 0;
             if ($fila['ya_matriculado']) {
-                $precio = ['valor' => 0.0, 'base' => Tarifas::precioBase(), 'regla' => 'Ya está matriculado'];
+                $precio = ['valor' => 0.0, 'base' => Tarifas::precioBase($modalidadId), 'regla' => 'Ya está matriculado'];
             } else {
-                $precio = Tarifas::calcular($porCiclo + 1, !empty($parejas[$c->id]));
+                $precio = Tarifas::alMes(
+                    Tarifas::calcular($modalidadId, $porCiclo[$modalidadId] + 1, !empty($parejas[$c->id])),
+                    $c,
+                    $calendario->primeraClase($c, Carbon::today())
+                );
                 // Solo los cursos activos ocupan lugar en el orden (mismo criterio de Tarifas::matriculasPorCiclo).
                 if ($c->estado && $c->activo) {
-                    $porCiclo++;
+                    $porCiclo[$modalidadId]++;
                 }
             }
             $filas[] = $fila + Arr::only($precio, ['valor', 'base', 'regla']);

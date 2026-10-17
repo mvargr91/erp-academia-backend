@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Validator;
 
 /**
  * Tarifas de la academia en una sola pantalla:
- *  - Cursos: total por ciclo según cuántos cursos, individual y en pareja (única fuente del precio).
+ *  - Cursos: por cada modalidad, total por ciclo según cuántos cursos, individual y en pareja (única fuente del precio).
  *  - Clases personalizadas: la clase suelta y los paquetes (4, 8… clases) con su precio normal, el
  *    precio para quien ya es alumno de un curso y los días de vigencia.
  */
@@ -37,27 +37,45 @@ class TarifaController extends Controller
                 'valor_alumno' => $p->valor_alumno === null ? null : (float) $p->valor_alumno,
                 'vigencia_dias' => $p->vigencia_dias === null ? null : (int) $p->vigencia_dias,
             ]);
-        return array_map('array_values', Tarifas::escalas()) + ['personalizadas' => $personalizadas];
+        // Las inactivas también, si tienen tarifa: sus cursos pueden seguir cobrando.
+        $modalidades = DB::table('modalidades')
+            ->where(fn ($q) => $q->where('estado', 1)->orWhereIn('id', DB::table('escalas_precio')->select('modalidad_id')))
+            ->orderBy('nombre')
+            ->get()
+            ->map(fn ($m) => [
+                'id' => $m->id,
+                'nombre' => $m->nombre,
+                'tipo_cobro' => $m->tipo_cobro,
+                'clases_por_ciclo' => $m->clases_por_ciclo === null ? null : (int) $m->clases_por_ciclo,
+                'duracion_minutos' => (int) $m->duracion_minutos,
+                'estado' => (bool) $m->estado,
+            ] + array_map('array_values', Tarifas::escalas($m->id)));
+        return ['modalidades' => $modalidades, 'personalizadas' => $personalizadas];
     }
 
-    /** GET /v1/tarifas → { individual: [totales], pareja: [totales], personalizadas: [paquetes] } (posición 0 = 1 curso). */
+    /**
+     * GET /v1/tarifas → { modalidades: [{ id, nombre, …, individual: [totales], pareja: [totales] }], personalizadas: [paquetes] }
+     * (en las escalas, posición 0 = 1 curso).
+     */
     public function index()
     {
         return response($this->datos(), Response::HTTP_OK);
     }
 
     /**
-     * PUT /v1/tarifas: reemplaza las escalas (una lista vacía quita esa escala) y, si viene
-     * `personalizadas`, crea/actualiza esos paquetes y desactiva los que ya no estén en la lista.
+     * PUT /v1/tarifas: reemplaza las escalas de cada modalidad que venga (una lista vacía quita esa
+     * escala) y, si viene `personalizadas`, crea/actualiza esos paquetes y desactiva los que ya no estén.
      */
     public function update(Request $request)
     {
         $datos = $request->all();
         $validator = Validator::make($datos, [
-            'individual' => 'array|nullable|max:20',
-            'individual.*' => 'numeric|min:0',
-            'pareja' => 'array|nullable|max:20',
-            'pareja.*' => 'numeric|min:0',
+            'modalidades' => 'array|nullable',
+            'modalidades.*.id' => 'integer|required|distinct|exists:modalidades,id',
+            'modalidades.*.individual' => 'array|nullable|max:20',
+            'modalidades.*.individual.*' => 'numeric|min:0',
+            'modalidades.*.pareja' => 'array|nullable|max:20',
+            'modalidades.*.pareja.*' => 'numeric|min:0',
             'personalizadas' => 'array|nullable|max:30',
             'personalizadas.*.id' => 'integer|nullable|exists:planes,id',
             'personalizadas.*.nombre' => 'string|required|max:100',
@@ -66,8 +84,8 @@ class TarifaController extends Controller
             'personalizadas.*.valor_alumno' => 'numeric|nullable|min:0',
             'personalizadas.*.vigencia_dias' => 'integer|nullable|min:1',
         ], [], [
-            'individual.*' => 'total de la escala individual',
-            'pareja.*' => 'total de la escala de pareja',
+            'modalidades.*.individual.*' => 'total de la escala individual',
+            'modalidades.*.pareja.*' => 'total de la escala de pareja',
             'personalizadas.*.nombre' => 'nombre del paquete',
             'personalizadas.*.clases' => 'número de clases',
             'personalizadas.*.valor' => 'precio',
@@ -79,20 +97,26 @@ class TarifaController extends Controller
         }
 
         // El total no puede bajar al agregar un curso (ese curso saldría con valor negativo).
-        foreach (Tarifas::TIPOS as $tipo) {
-            $totales = array_values($datos[$tipo] ?? []);
-            foreach ($totales as $i => $total) {
-                if ($i > 0 && (float) $total < (float) $totales[$i - 1]) {
-                    return response(get_response_body([
-                        'En la escala ' . self::NOMBRES[$tipo] . ', el total de ' . ($i + 1) . ' cursos no puede ser menor que el de ' . $i . '.',
-                    ]), Response::HTTP_BAD_REQUEST);
+        $nombres = DB::table('modalidades')->pluck('nombre', 'id');
+        foreach ($datos['modalidades'] ?? [] as $modalidad) {
+            foreach (Tarifas::TIPOS as $tipo) {
+                $totales = array_values($modalidad[$tipo] ?? []);
+                foreach ($totales as $i => $total) {
+                    if ($i > 0 && (float) $total < (float) $totales[$i - 1]) {
+                        return response(get_response_body([
+                            "{$nombres[$modalidad['id']]}: en la escala " . self::NOMBRES[$tipo] . ', el total de ' . ($i + 1)
+                                . ' cursos no puede ser menor que el de ' . $i . '.',
+                        ]), Response::HTTP_BAD_REQUEST);
+                    }
                 }
             }
         }
 
         try {
             DB::transaction(function () use ($datos) {
-                Tarifas::guardarEscalas($datos);
+                foreach ($datos['modalidades'] ?? [] as $modalidad) {
+                    Tarifas::guardarEscalas((int) $modalidad['id'], $modalidad);
+                }
                 if (array_key_exists('personalizadas', $datos)) {
                     $this->guardarPersonalizadas($datos['personalizadas'] ?? []);
                 }

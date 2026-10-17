@@ -169,9 +169,12 @@ class ImportarAlumnos extends Command
             if ($curso) {
                 $resumen['Cursos que ya estaban']++;
             } else {
+                // Los cursos importados quedan en la primera modalidad activa (se cambia después en el curso).
+                $modalidadId ??= DB::table('modalidades')->where('estado', 1)->orderBy('id')->value('id')
+                    ?? DB::table('modalidades')->orderBy('id')->value('id');
                 $curso = Curso::create([
                     'nombre' => $b['ritmo'], 'sede_id' => $sedeId, 'ritmo_id' => $ritmoId, 'profesor_id' => $profesorId,
-                    'dia' => $b['dia'], 'hora' => $b['hora'], 'activo' => 1, 'estado' => 1,
+                    'modalidad_id' => $modalidadId, 'dia' => $b['dia'], 'hora' => $b['hora'], 'activo' => 1, 'estado' => 1,
                 ] + $this->auditoria);
                 $resumen['Cursos nuevos']++;
             }

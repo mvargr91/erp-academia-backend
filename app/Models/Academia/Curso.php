@@ -26,8 +26,10 @@ class Curso extends Model
         'sede_id',
         'ritmo_id',
         'profesor_id',
+        'modalidad_id',
         'dia',
         'hora',
+        'duracion_minutos',
         'fecha_inicio',
         'cupo_max',
         'activo',
@@ -59,9 +61,13 @@ class Curso extends Model
             ->leftJoin('ritmos', 'ritmos.id', '=', 'cursos.ritmo_id')
             ->leftJoin('profesores', 'profesores.id', '=', 'cursos.profesor_id')
             ->leftJoin('sedes', 'sedes.id', '=', 'cursos.sede_id')
+            ->leftJoin('modalidades', 'modalidades.id', '=', 'cursos.modalidad_id')
             ->select(
                 'cursos.id',
                 'cursos.nombre',
+                'cursos.modalidad_id',
+                'modalidades.nombre as modalidad_nombre',
+                DB::raw('COALESCE(cursos.duracion_minutos, modalidades.duracion_minutos) as duracion_minutos'),
                 'cursos.sede_id',
                 'sedes.nombre as sede_nombre',
                 'cursos.ritmo_id',
@@ -105,6 +111,9 @@ class Curso extends Model
                 }
                 if ($attribute == 'profesor_nombre') {
                     $query->orderBy('profesores.nombres', $value);
+                }
+                if ($attribute == 'modalidad_nombre') {
+                    $query->orderBy('modalidades.nombre', $value);
                 }
                 if (in_array($attribute, ['dia', 'hora', 'fecha_inicio', 'activo', 'estado', 'usuario_creacion_nombre'])) {
                     $query->orderBy('cursos.' . $attribute, $value);
@@ -170,8 +179,10 @@ class Curso extends Model
             'sede_id' => $curso->sede_id,
             'ritmo_id' => $curso->ritmo_id,
             'profesor_id' => $curso->profesor_id,
+            'modalidad_id' => $curso->modalidad_id,
             'dia' => $curso->dia,
             'hora' => $curso->hora ? substr($curso->hora, 0, 5) : null,
+            'duracion_minutos' => $curso->duracion_minutos,
             'fecha_inicio' => $curso->fecha_inicio,
             'cupo_max' => $curso->cupo_max,
             'activo' => $curso->activo,
@@ -269,7 +280,7 @@ class Curso extends Model
      */
     private static function reanudarCiclos($curso): void
     {
-        if (!Tarifas::cobra()) {
+        if (!Tarifas::cobra((int) $curso->modalidad_id)) {
             return;
         }
         $calendario = new CalendarioCurso();
@@ -278,11 +289,11 @@ class Curso extends Model
         $matriculas = DB::table('curso_alumno')->where('curso_id', $curso->id)->where('estado', 1)->get();
 
         foreach ($matriculas as $m) {
-            $ciclo = $calendario->ciclo($curso, $m, CalendarioCurso::clasesPorCiclo());
+            $ciclo = $calendario->ciclo($curso, $m, CalendarioCurso::clasesPorCiclo($curso));
             if ($hoy->lt($ciclo['proximo_pago'])) {
                 continue;
             }
-            $precio = Tarifas::precio($m->id);
+            $precio = Tarifas::precioDesde($m->id, $curso, Carbon::parse($proximaClase));
             DB::table('cargos_mensuales')->insertOrIgnore([
                 'curso_alumno_id' => $m->id, 'periodo' => $proximaClase, 'valor' => $precio['valor'],
                 'valor_base' => $precio['base'], 'regla' => $precio['regla'],
@@ -321,9 +332,10 @@ class Curso extends Model
         if ($parejaId) {
             self::emparejar((int) $curso->id, $alumnoId, $parejaId, $ajustarCicloPareja);
         }
-        // El primer ciclo se cobra con su precio según el orden de matrícula (2.º, 3.º curso…).
+        // El primer ciclo se cobra con su precio según el orden de matrícula (2.º, 3.º curso…);
+        // en una mensualidad, solo las clases que le quedan a ese mes.
         DB::table('curso_alumno')->where('id', $cursoAlumnoId)
-            ->update(['saldo' => Tarifas::precio($cursoAlumnoId)['valor']]);
+            ->update(['saldo' => Tarifas::precioDesde($cursoAlumnoId, $curso, Carbon::parse($primeraClase))['valor']]);
         if ($notificar) {
             NotificadorAcademia::bienvenida($cursoAlumnoId);
         }

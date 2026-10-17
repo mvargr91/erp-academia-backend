@@ -14,7 +14,7 @@ use App\Mail\Academia\NotificacionAlumnoMail as Correo;
 /**
  * Cobro por ciclos de clases y correos a los alumnos de la academia activa.
  *
- * Cada matrícula paga ciclos de N clases (parámetro CLASES_POR_CICLO, 4 por defecto) al precio de Tarifas
+ * Cada matrícula paga ciclos de N clases (los de la modalidad del curso) al precio de Tarifas
  * según el calendario de su curso: una clase semanal que se salta festivos y cierres
  * (CalendarioCurso). Si una clase cae en festivo, el ciclo termina una semana después.
  *  - La matrícula cobra el primer ciclo; el día de la 1.ª clase del ciclo siguiente se causa su valor.
@@ -41,27 +41,30 @@ class NotificadorAcademia
         $cadaDias = Configuracion::entero('DIAS_ENTRE_AVISOS_MORA', config('academias.notificaciones.dias_entre_avisos_mora'));
         $desdeMora = $this->hoy->copy()->subDays($cadaDias - 1)->toDateString();
 
-        // Sin tarifa definida los cursos no causan cobro.
-        $porCiclos = Tarifas::cobra();
         foreach ($this->matriculas()->get() as $m) {
-            $ciclo = $porCiclos ? $this->avanzarCiclo($m, $resumen) : null;
+            // Sin tarifa en su modalidad el curso no causa cobro.
+            $ciclo = Tarifas::cobra((int) $m->modalidad_id) ? $this->avanzarCiclo($m, $resumen) : null;
 
             if (!$m->correo) {
                 continue;
             }
 
-            // Recordatorio del próximo ciclo.
+            // Recordatorio del próximo ciclo (en una mensualidad, del mes siguiente; si ese mes no tiene clases no se cobra ni se avisa).
             if ($ciclo) {
                 $proximo = $ciclo['proximo_pago'];
                 $faltan = (int) round($this->hoy->diffInDays($proximo, false));
                 if ($faltan > 0 && $faltan <= $diasAviso
                     && !$this->yaEnviado(Correo::RECORDATORIO, $m->id, fn ($q) => $q->where('periodo', $proximo->toDateString()))) {
-                    $this->enviar(Correo::RECORDATORIO, $m, $proximo, [
-                        'valor' => Tarifas::precio($m->id)['valor'],
-                        'saldo' => (float) $m->saldo,
-                        'fecha_vencimiento' => $proximo->format('d/m/Y'),
-                        'clases_por_ciclo' => $ciclo['clases_por_ciclo'],
-                    ], $resumen);
+                    $valor = Tarifas::precioDesde($m->id, $m, $proximo)['valor'];
+                    $siguiente = $this->calendario->ciclo($m, (object) ['ciclo_inicio' => $proximo->toDateString()]);
+                    if ($valor > 0) {
+                        $this->enviar(Correo::RECORDATORIO, $m, $proximo, [
+                            'valor' => $valor,
+                            'saldo' => (float) $m->saldo,
+                            'fecha_vencimiento' => $proximo->format('d/m/Y'),
+                            'clases_por_ciclo' => $siguiente['clases_por_ciclo'],
+                        ], $resumen);
+                    }
                 }
             }
 
@@ -212,19 +215,19 @@ class NotificadorAcademia
             ->where('a.estado', 1)
             ->select(
                 'ca.id', 'ca.curso_id', 'ca.alumno_id', 'ca.saldo', 'ca.fecha_matricula', 'ca.ciclo_inicio',
-                'c.nombre as curso', 'c.sede_id', 'c.dia', 'c.fecha_inicio', 'a.correo',
+                'c.nombre as curso', 'c.sede_id', 'c.dia', 'c.fecha_inicio', 'c.modalidad_id', 'a.correo',
                 DB::raw("CONCAT(a.nombres, ' ', a.apellidos) as alumno")
             );
     }
 
     /**
      * Causa los ciclos cuyo inicio ya llegó (idempotente por cargos_mensuales.periodo = 1.ª clase
-     * del ciclo) y deja la matrícula en su ciclo vigente. Devuelve ese ciclo.
+     * del ciclo, o el día 1 del mes en una mensualidad) y deja la matrícula en su ciclo vigente.
+     * Devuelve ese ciclo.
      */
     private function avanzarCiclo(object $m, array &$resumen): array
     {
-        $n = CalendarioCurso::clasesPorCiclo();
-        $ciclo = $this->calendario->ciclo($m, $m, $n);
+        $ciclo = $this->calendario->ciclo($m, $m);
 
         if (!$m->ciclo_inicio && !$this->simular) {
             DB::table('curso_alumno')->where('id', $m->id)->update(['ciclo_inicio' => $ciclo['inicio']->toDateString()]);
@@ -232,8 +235,9 @@ class NotificadorAcademia
 
         for ($i = 0; $this->hoy->gte($ciclo['proximo_pago']) && $i < self::MAX_CICLOS_POR_CORRIDA; $i++) {
             $periodo = $ciclo['proximo_pago']->toDateString();
-            // Precio del ciclo según su posición entre los cursos del alumno y si el curso es en pareja.
-            $precio = Tarifas::precio($m->id);
+            // Precio del ciclo según su posición entre los cursos del alumno y si el curso es en pareja
+            // (una mensualidad con el mes entero cerrado no se cobra).
+            $precio = Tarifas::precioDesde($m->id, $m, Carbon::parse($periodo));
             $resumen['cargos']++;
             if (!$this->simular) {
                 DB::transaction(function () use ($m, $periodo, $precio) {
@@ -255,7 +259,7 @@ class NotificadorAcademia
             }
             $m->saldo = (float) $m->saldo + (float) $precio['valor'];
             $m->ciclo_inicio = $periodo;
-            $ciclo = $this->calendario->ciclo($m, $m, $n);
+            $ciclo = $this->calendario->ciclo($m, $m);
         }
         return $ciclo;
     }
@@ -370,7 +374,7 @@ class NotificadorAcademia
             ->where('ca.id', $cursoAlumnoId)
             ->select(
                 'ca.id', 'ca.curso_id', 'ca.alumno_id', 'ca.fecha_matricula', 'ca.ciclo_inicio', 'a.correo',
-                'c.nombre as curso', 'c.sede_id', 'c.dia', 'c.hora', 'c.fecha_inicio',
+                'c.nombre as curso', 'c.sede_id', 'c.dia', 'c.hora', 'c.fecha_inicio', 'c.modalidad_id',
                 DB::raw("CONCAT(a.nombres, ' ', a.apellidos) as alumno"),
                 DB::raw("CONCAT(pr.nombres, ' ', pr.apellidos) as profesor")
             )
@@ -380,8 +384,13 @@ class NotificadorAcademia
             return;
         }
 
-        $porCiclos = Tarifas::cobra();
-        $ciclo = (new CalendarioCurso())->ciclo($m, $m, CalendarioCurso::clasesPorCiclo());
+        $porCiclos = Tarifas::cobra((int) $m->modalidad_id);
+        $calendario = new CalendarioCurso();
+        $ciclo = $calendario->ciclo($m, $m);
+        // En una mensualidad el valor es el del mes completo: las clases que se informan son las del primer mes entero.
+        $clases = $ciclo['mensual']
+            ? $calendario->ciclo($m, (object) ['ciclo_inicio' => $ciclo['proximo_pago']->toDateString()])['clases_por_ciclo']
+            : $ciclo['clases_por_ciclo'];
         $datos = [
             'alumno' => $m->alumno,
             'curso' => $m->curso,
@@ -389,7 +398,7 @@ class NotificadorAcademia
             'horario' => (self::DIAS_SEMANA[$m->dia] ?? '') . ' ' . substr((string) $m->hora, 0, 5),
             'valor' => $porCiclos ? Tarifas::precio($m->id)['valor'] : null,
             'primera_clase' => $ciclo['inicio']->format('d/m/Y'),
-            'clases_por_ciclo' => $porCiclos ? $ciclo['clases_por_ciclo'] : null,
+            'clases_por_ciclo' => $porCiclos ? $clases : null,
             'proximo_pago' => $porCiclos ? $ciclo['proximo_pago']->format('d/m/Y') : null,
         ];
         $correo = new Correo(Correo::BIENVENIDA, self::datosAcademia($academia), $datos);

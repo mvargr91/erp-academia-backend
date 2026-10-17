@@ -24,11 +24,13 @@ class CalendarioController extends Controller
         $curso = DB::table('cursos as c')
             ->leftJoin('ritmos as r', 'r.id', '=', 'c.ritmo_id')
             ->where('c.id', $id)
-            ->select('c.id', 'c.nombre', 'c.sede_id', 'c.dia', 'c.hora', 'c.fecha_inicio', 'r.nombre as ritmo')
+            ->select('c.id', 'c.nombre', 'c.sede_id', 'c.dia', 'c.hora', 'c.fecha_inicio', 'c.modalidad_id', 'r.nombre as ritmo')
             ->first();
         if (!$curso) {
             return response(get_response_body(['El curso no existe.']), Response::HTTP_NOT_FOUND);
         }
+        // En una mensualidad la clase que cae en festivo o cierre no se repone (no se corre).
+        $mensual = CalendarioCurso::esMensual($curso);
 
         $calendario = new CalendarioCurso();
         $desde = $request->filled('desde') ? Carbon::parse($request->desde) : Carbon::today()->subWeeks(2);
@@ -38,19 +40,20 @@ class CalendarioController extends Controller
         // Cada semana sin clase indica a qué fecha se corre (la siguiente clase).
         $lista = $calendario->semanas($curso, $desde, $hasta);
         foreach ($lista as &$semana) {
-            if ($semana['estado'] !== 'clase') {
+            if ($semana['estado'] !== 'clase' && !$mensual) {
                 $semana['se_corre_a'] = $calendario->proximasClases($curso, Carbon::parse($semana['fecha']), 1)[0]?->toDateString();
             }
         }
         unset($semana);
 
-        $clasesPorCiclo = CalendarioCurso::clasesPorCiclo();
+        $clasesPorCiclo = CalendarioCurso::clasesPorCiclo($curso);
         return response([
             'curso' => [
                 'id' => $curso->id,
                 'nombre' => $curso->nombre ?: $curso->ritmo,
                 'horario' => self::DIAS[(int) $curso->dia] . ' ' . substr((string) $curso->hora, 0, 5),
-                'clases_por_ciclo' => $clasesPorCiclo,
+                'clases_por_ciclo' => $mensual ? null : $clasesPorCiclo,
+                'mensual' => $mensual,
                 'fecha_inicio' => $curso->fecha_inicio,
             ],
             'dicta_festivos' => Configuracion::siNo('DICTA_FESTIVOS', false),

@@ -4,10 +4,13 @@ namespace App\Services\Academia;
 
 use App\Support\Configuracion\Configuracion;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 
 /**
  * Calendario de clases de un curso (una clase por semana en su día) y ciclos de pago.
+ * Según la modalidad del curso, el ciclo es de N clases dictadas o un mes calendario (mensualidad:
+ * mismo precio con 4 o 5 semanas; los festivos y cierres no se reponen).
  *
  * Una fecha es "de clase" si cae en el día del curso, desde su fecha de inicio, y no es
  * festivo nacional (BD central) ni cierre de la academia (general o de la sede del curso).
@@ -30,10 +33,36 @@ class CalendarioCurso
     private ?string $cargadoDesde = null;
     private ?string $cargadoHasta = null;
 
-    /** Clases por ciclo de pago: las del plan, o 4 por defecto. */
-    public static function clasesPorCiclo(): int
+    public const MENSUAL = 'mensual';
+
+    /** @var array<string, array<int, object>> Modalidades (tipo de cobro, clases por ciclo), por base de datos (una por academia). */
+    private static array $modalidades = [];
+
+    /** Modalidad del curso. El curso llega como curso o como fila de matrícula; sin modalidad_id se busca por su id. */
+    private static function modalidadDe(object $curso): ?object
     {
-        return max(1, Configuracion::entero('CLASES_POR_CICLO', 4));
+        $baseDatos = DB::connection()->getDatabaseName();
+        self::$modalidades[$baseDatos] ??= DB::table('modalidades')->get(['id', 'tipo_cobro', 'clases_por_ciclo'])->keyBy('id')->all();
+        $modalidadId = $curso->modalidad_id ?? DB::table('cursos')->where('id', self::cursoDe($curso))->value('modalidad_id');
+        return self::$modalidades[$baseDatos][(int) $modalidadId] ?? null;
+    }
+
+    /** ¿El curso se cobra por mes calendario (mensualidad) en lugar de por ciclo de N clases? */
+    public static function esMensual(object $curso): bool
+    {
+        return (self::modalidadDe($curso)->tipo_cobro ?? null) === self::MENSUAL;
+    }
+
+    /** Clases por ciclo de pago del curso: las de su modalidad (en una mensual, las de un mes típico: 4). */
+    public static function clasesPorCiclo(object $curso): int
+    {
+        return max(1, (int) (self::modalidadDe($curso)->clases_por_ciclo ?? 4));
+    }
+
+    /** Tras crear, cambiar o borrar una modalidad. */
+    public static function olvidarModalidades(): void
+    {
+        unset(self::$modalidades[DB::connection()->getDatabaseName()]);
     }
 
     /** Festivos y cierres entre dos fechas: fecha => [tipo, motivo]. */
@@ -206,14 +235,18 @@ class CalendarioCurso
     }
 
     /**
-     * Ciclo actual de una matrícula.
-     * @return array{inicio: Carbon, fin: Carbon, proximo_pago: Carbon, clases: Carbon[], clases_por_ciclo: int}
+     * Ciclo actual de una matrícula (en modalidad mensual, el mes de ciclo_inicio).
+     * @return array{inicio: Carbon, fin: Carbon, proximo_pago: Carbon, clases: Carbon[], clases_por_ciclo: int, mensual: bool}
      */
-    public function ciclo(object $curso, object $matricula, int $clasesPorCiclo): array
+    public function ciclo(object $curso, object $matricula, ?int $clasesPorCiclo = null): array
     {
         $inicio = $matricula->ciclo_inicio
             ? Carbon::parse($matricula->ciclo_inicio)
             : $this->primeraClase($curso, Carbon::parse($matricula->fecha_matricula ?? Carbon::today()));
+        if (self::esMensual($curso)) {
+            return $this->mes($curso, $inicio);
+        }
+        $clasesPorCiclo ??= self::clasesPorCiclo($curso);
         $clases = $this->proximasClases($curso, $inicio, $clasesPorCiclo + 1);
         $delCiclo = array_slice($clases, 0, $clasesPorCiclo);
         return [
@@ -222,6 +255,53 @@ class CalendarioCurso
             'proximo_pago' => $clases[$clasesPorCiclo] ?? $inicio->copy()->addWeeks($clasesPorCiclo),
             'clases' => $delCiclo,
             'clases_por_ciclo' => $clasesPorCiclo,
+            'mensual' => false,
+        ];
+    }
+
+    /**
+     * Periodo mensual que empieza en $inicio (el día 1, o la primera clase si el alumno entró a mitad
+     * de mes): sus clases hasta fin de mes. El siguiente pago es el día 1 del mes siguiente.
+     */
+    private function mes(object $curso, Carbon $inicio): array
+    {
+        $finMes = $inicio->copy()->endOfMonth()->startOfDay();
+        $clases = $this->clasesEntre($curso, $inicio, $finMes);
+        return [
+            'inicio' => $clases[0] ?? $inicio->copy()->startOfDay(),
+            'fin' => end($clases) ?: $finMes,
+            'proximo_pago' => $inicio->copy()->startOfMonth()->addMonthNoOverflow(),
+            'clases' => $clases,
+            'clases_por_ciclo' => count($clases),
+            'mensual' => true,
+        ];
+    }
+
+    /** Fechas de clase del curso entre dos fechas (inclusive), sin festivos ni cierres. @return Carbon[] */
+    private function clasesEntre(object $curso, Carbon $desde, Carbon $hasta): array
+    {
+        $clases = [];
+        foreach ($this->semanas($curso, $desde, $hasta) as $semana) {
+            if ($semana['estado'] === 'clase') {
+                $clases[] = Carbon::parse($semana['fecha']);
+            }
+        }
+        return $clases;
+    }
+
+    /**
+     * Clases del mes de $desde: las que quedan desde esa fecha y las que tiene el mes completo (aunque el
+     * curso empiece a mitad de mes). Sirve para cobrar proporcional el primer mes de una mensualidad.
+     * @return array{0: int, 1: int}  [quedan, total]
+     */
+    public function clasesDelMes(object $curso, Carbon $desde): array
+    {
+        $finMes = $desde->copy()->endOfMonth()->startOfDay();
+        $datos = $curso instanceof Model ? $curso->getAttributes() : (array) $curso;
+        $sinInicio = (object) array_merge($datos, ['fecha_inicio' => null]);
+        return [
+            count($this->clasesEntre($curso, $desde, $finMes)),
+            count($this->clasesEntre($sinInicio, $desde->copy()->startOfMonth(), $finMes)),
         ];
     }
 

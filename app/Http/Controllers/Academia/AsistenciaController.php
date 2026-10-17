@@ -105,12 +105,12 @@ class AsistenciaController extends Controller
 
         $curso = DB::table('cursos as c')
             ->where('c.id', $request->curso_id)
-            ->select('c.id', 'c.sede_id', 'c.dia', 'c.fecha_inicio')
+            ->select('c.id', 'c.sede_id', 'c.dia', 'c.fecha_inicio', 'c.modalidad_id')
             ->first();
         $calendario = new CalendarioCurso();
         $fecha = Carbon::parse($request->fecha);
         $validacion = $calendario->validarFecha($curso, $fecha);
-        $clasesPorCiclo = CalendarioCurso::clasesPorCiclo();
+        $clasesPorCiclo = CalendarioCurso::clasesPorCiclo($curso);
 
         $alumnos = DB::table('curso_alumno as ca')
             ->join('alumnos as a', 'a.id', '=', 'ca.alumno_id')
@@ -122,6 +122,7 @@ class AsistenciaController extends Controller
             ->get()
             ->map(function ($m) use ($calendario, $curso, $clasesPorCiclo, $fecha, $validacion) {
                 $numero = null;
+                $total = $clasesPorCiclo;
                 if ($validacion['valida']) {
                     $ciclo = $calendario->ciclo($curso, $m, $clasesPorCiclo);
                     // Si la fecha ya pasó el ciclo registrado, se cuenta dentro del ciclo siguiente.
@@ -130,12 +131,14 @@ class AsistenciaController extends Controller
                         $m->ciclo_inicio = $ciclo['proximo_pago']->toDateString();
                         $ciclo = $calendario->ciclo($curso, $m, $clasesPorCiclo);
                     }
+                    // En una mensualidad, las clases que trae ese mes (4 o 5).
+                    $total = $ciclo['clases_por_ciclo'];
                 }
                 return [
                     'alumno_id' => $m->alumno_id,
                     'nombre' => $m->nombre,
                     'clase_numero' => $numero,
-                    'clases_ciclo' => $clasesPorCiclo,
+                    'clases_ciclo' => $total,
                     'saldo' => (float) $m->saldo,
                 ];
             });

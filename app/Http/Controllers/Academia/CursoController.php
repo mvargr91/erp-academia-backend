@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Validator;
 
 class CursoController extends Controller
 {
-    private const MENSAJES = ['sede_id.required' => 'Elige la sede del curso.'];
+    private const MENSAJES = ['sede_id.required' => 'Elige la sede del curso.', 'modalidad_id.required' => 'Elige la modalidad del curso.'];
 
     private function reglas($id = null)
     {
@@ -22,8 +22,11 @@ class CursoController extends Controller
             'sede_id' => 'bail|required|integer|exists:sedes,id',
             'ritmo_id' => 'integer|required|exists:ritmos,id',
             'profesor_id' => 'integer|nullable|exists:profesores,id',
+            'modalidad_id' => 'bail|required|integer|exists:modalidades,id',
             'dia' => 'integer|required|between:0,6',
             'hora' => 'required|date_format:H:i',
+            // Vacío: la de la modalidad.
+            'duracion_minutos' => 'integer|nullable|between:15,600',
             'fecha_inicio' => 'date|nullable',
             'cupo_max' => 'integer|nullable|min:1',
             'activo' => 'boolean|required',

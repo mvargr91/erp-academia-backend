@@ -176,7 +176,7 @@ class Alumno extends Model
                 DB::raw("CONCAT(COALESCE(c.nombre, r.nombre), ' - ', DATE_FORMAT(c.hora, '%H:%i')) as curso"),
                 's.nombre as sede',
                 // Para el avance del ciclo (CalendarioCurso).
-                'ca.ciclo_inicio', 'c.dia', 'c.fecha_inicio', 'c.sede_id', 'c.estado as curso_estado', 'c.activo as curso_activo',
+                'ca.ciclo_inicio', 'c.dia', 'c.fecha_inicio', 'c.sede_id', 'c.modalidad_id', 'c.estado as curso_estado', 'c.activo as curso_activo',
                 DB::raw('(SELECT COALESCE(SUM(pg.monto), 0) FROM pagos pg WHERE pg.alumno_id = ca.alumno_id AND pg.curso_id = ca.curso_id AND pg.paquete_id IS NULL) as pagado'),
             )
             ->get();
@@ -192,9 +192,10 @@ class Alumno extends Model
                 'curso_activo' => (bool) ($c->curso_estado && $c->curso_activo),
             ];
             // Clases del ciclo vigente que ya se dictaron (si la academia cobra los cursos).
-            if (Tarifas::cobra()) {
-                $ciclo = $calendario->ciclo($c, $c, CalendarioCurso::clasesPorCiclo());
-                $fila += CalendarioCurso::avance($ciclo, Carbon::today()) + ['proximo_pago' => $ciclo['proximo_pago']->toDateString()];
+            if (Tarifas::cobra((int) $c->modalidad_id)) {
+                $ciclo = $calendario->ciclo($c, $c, CalendarioCurso::clasesPorCiclo($c));
+                $fila += CalendarioCurso::avance($ciclo, Carbon::today())
+                    + ['proximo_pago' => $ciclo['proximo_pago']->toDateString(), 'mensual' => $ciclo['mensual']];
             }
             return $fila;
         });

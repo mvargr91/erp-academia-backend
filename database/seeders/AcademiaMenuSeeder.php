@@ -31,17 +31,20 @@ class AcademiaMenuSeeder extends Seeder
     // por rol como cualquier otro.
     private const MENU = [
         'Academia' => ['school', 5, [
-            ['Panel Academia', '/dashboard-academia', 'dashboard', 'DashboardAcademia'],
             ['Alumnos', '/alumnos', 'groups', 'Alumno', ['EstadoCuenta' => 'Listar', 'Exportar' => 'Listar']],
             ['Matrícula rápida', '/matriculas', 'how_to_reg', 'Matricula'],
             ['Profesores', '/profesores', 'person', 'Profesor', ['Exportar' => 'Listar']],
             ['Cursos', '/cursos', 'event', 'Curso', ['FormaDePago' => 'Modificar', 'ValorEspecial', 'Exportar' => 'Listar']],
             ['Tomar asistencia', '/tomar-asistencia', 'checklist', 'TomaAsistencia'],
-            ['Asistencia', '/asistencias', 'fact_check', 'Asistencia', ['Exportar' => 'Listar']],
             ['Clases personalizadas', '/clases-privadas', 'person_pin', 'ClasePrivada', ['Pagar', 'RegistrarAsistencia' => 'Modificar', 'Exportar' => 'Listar']],
             ['Paquetes de clases', '/paquetes', 'card_membership', 'Paquete', ['Pagar', 'RegistrarClases' => 'Modificar', 'Exportar' => 'Listar']],
             ['Envíos de correo', '/envios-correo', 'campaign', 'EnvioCorreo', ['Exportar' => 'Listar']],
+        ]],
+        // Consultas y exportes; las opciones se identifican por url, así que al moverlas conservan sus permisos.
+        'Exportes' => ['file_download', 8, [
+            ['Asistencia', '/asistencias', 'fact_check', 'Asistencia', ['Exportar' => 'Listar']],
             ['Pagos', '/pagos', 'payments', 'Pago', ['Condonar', 'Exportar' => 'Listar']],
+            ['Panel Academia', '/dashboard-academia', 'dashboard', 'DashboardAcademia'],
         ]],
         // Público aparte: nada de esto se mezcla con alumnos, cursos ni pagos de la academia.
         'Vacacionales' => ['beach_access', 6, [
@@ -56,6 +59,7 @@ class AcademiaMenuSeeder extends Seeder
         'Configuración Academia' => ['settings', 7, [
             ['Sedes', '/sedes', 'store', 'Sede', ['Exportar' => 'Listar']],
             ['Ritmos', '/ritmos', 'music_note', 'Ritmo', ['Exportar' => 'Listar']],
+            ['Modalidades', '/modalidades', 'view_module', 'Modalidad', ['Exportar' => 'Listar']],
             ['Tarifas', '/tarifas', 'price_change', 'Tarifa'],
             ['Cierres de la academia', '/cierres', 'event_busy', 'Cierre', ['Exportar' => 'Listar']],
             ['Parámetros', '/parametros', 'tune', 'ParametroSistema', ['Exportar' => 'Listar']],

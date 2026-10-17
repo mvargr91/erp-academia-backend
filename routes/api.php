@@ -237,7 +237,16 @@ Route::group(['middleware' => ['auth:api']], function (){
         Route::delete('/{id}', [Academia\RitmoController::class, 'destroy'])->name('ritmos.delete')->middleware('permission:EliminarRitmo');
     });
 
-    // Tarifas: precio de los cursos (individual y pareja) y de las clases personalizadas
+    // Modalidades de los cursos (clases por ciclo y duración); su precio va en Tarifas
+    Route::group(["prefix" => "modalidades"], function () {
+        Route::get('/', [Academia\ModalidadController::class, 'index'])->name('modalidades.index')->middleware(Permisos::lectura(['Modalidad', 'Curso', 'Tarifa']));
+        Route::post('/', [Academia\ModalidadController::class, 'store'])->name('modalidades.store')->middleware('permission:CrearModalidad');
+        Route::get('/{id}', [Academia\ModalidadController::class, 'show'])->name('modalidades.show')->middleware(Permisos::lectura(['Modalidad', 'Curso']));
+        Route::put('/{id}', [Academia\ModalidadController::class, 'update'])->name('modalidades.update')->middleware('permission:ModificarModalidad');
+        Route::delete('/{id}', [Academia\ModalidadController::class, 'destroy'])->name('modalidades.delete')->middleware('permission:EliminarModalidad');
+    });
+
+    // Tarifas: precio de los cursos (individual y pareja, por modalidad) y de las clases personalizadas
     Route::group(["prefix" => "tarifas"], function () {
         Route::get('/', [Academia\TarifaController::class, 'index'])->name('tarifas.index')->middleware(Permisos::lectura(['Tarifa']));
         Route::put('/', [Academia\TarifaController::class, 'update'])->name('tarifas.update')->middleware('permission:ModificarTarifa');
