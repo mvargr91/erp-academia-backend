@@ -16,9 +16,9 @@ use Illuminate\Support\Str;
 class Apariencia
 {
     public const DEFECTO = [
-        'color_primario' => '#00A1CC',
-        'color_menu' => '#1C4A59',
-        'color_acento' => '#00A1CC',
+        'color_primario' => '#0058F4',
+        'color_menu' => '#111736',
+        'color_acento' => '#8943E7',
         'modo' => 'claro',
         'login_titulo' => '',
         'login_subtitulo' => '',

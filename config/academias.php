@@ -51,7 +51,7 @@ return [
     | pasados 'dias_gracia' desde el vencimiento sin pago, la academia se suspende.
     */
     'facturacion' => [
-        'marca' => env('ERP_MARCA', env('APP_NAME', 'ERP Academias')),
+        'marca' => env('ERP_MARCA', env('APP_NAME', 'Zunevia')),
         'tarifa_base' => (float) env('ERP_TARIFA_MENSUAL', 0),
         'dias_plazo' => (int) env('ERP_DIAS_PLAZO', 5),
         'dias_recordatorio' => 3,
