@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Amplía el certificado SSL del ERP con los subdominios de las academias.
+#
+# Lo ejecuta el ERP al crear una academia (App\Support\Academias\Certificado), como root vía sudo:
+#   sudo -n /usr/local/sbin/erp-certificado salsa.zunevia.digital demo.zunevia.digital ...
+#
+# - Solo acepta <codigo>.zunevia.digital: cualquier otro argumento se rechaza.
+# - Conserva siempre los nombres que el certificado ya tiene: nunca quita ninguno.
+# - Si no hay subdominios nuevos, termina sin llamar a Let's Encrypt.
+#
+# Instalación (una vez, como root):
+#   install -m 755 -o root -g root scripts/servidor/erp-certificado /usr/local/sbin/erp-certificado
+#   echo 'www-data ALL=(root) NOPASSWD: /usr/local/sbin/erp-certificado' > /etc/sudoers.d/erp-certificado
+#   chmod 440 /etc/sudoers.d/erp-certificado && visudo -c
+set -euo pipefail
+
+DOMINIO="zunevia.digital"
+CERTIFICADO="zunevia.digital" # --cert-name del certificado que usa Nginx
+ACTUAL="/etc/letsencrypt/live/${CERTIFICADO}/cert.pem"
+
+declare -A nombres=(["$DOMINIO"]=1 ["api.$DOMINIO"]=1)
+
+# Nombres que ya cubre el certificado.
+if [[ -f "$ACTUAL" ]]; then
+  while read -r nombre; do
+    [[ -n "$nombre" ]] && nombres["$nombre"]=1
+  done < <(openssl x509 -in "$ACTUAL" -noout -ext subjectAltName | grep -o 'DNS:[^,]*' | cut -c5-)
+fi
+
+nuevos=0
+for nombre in "$@"; do
+  if [[ ! "$nombre" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.zunevia\.digital$ ]]; then
+    echo "Subdominio no permitido: $nombre" >&2
+    exit 2
+  fi
+  if [[ -z "${nombres[$nombre]:-}" ]]; then
+    nombres["$nombre"]=1
+    nuevos=$((nuevos + 1))
+  fi
+done
+
+if ((nuevos == 0)); then
+  echo "El certificado ya cubre todos los subdominios."
+  exit 0
+fi
+
+argumentos=()
+for nombre in "${!nombres[@]}"; do
+  argumentos+=(-d "$nombre")
+done
+
+certbot certonly --nginx --cert-name "$CERTIFICADO" --expand --non-interactive --agree-tos \
+  --deploy-hook "systemctl reload nginx" "${argumentos[@]}"
+systemctl reload nginx
+echo "Certificado ampliado con ${nuevos} subdominio(s) nuevo(s)."

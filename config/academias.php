@@ -30,6 +30,13 @@ return [
     */
     'frontend_index' => env('FRONTEND_INDEX', '/var/www/erp-frontend/index.html'),
 
+    /*
+    | Comando que amplía el certificado SSL del servidor con los subdominios de las academias (recibe
+    | cada <codigo>.<dominio> como argumento). Producción: "sudo -n /usr/local/sbin/erp-certificado".
+    | Vacío = no se gestiona (desarrollo). Ver App\Support\Academias\Certificado.
+    */
+    'certificado_comando' => env('ACADEMIAS_CERTIFICADO'),
+
     // Subdominios que nunca corresponden a una academia.
     'subdominios_reservados' => ['www', 'api', 'mail'],
 

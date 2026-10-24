@@ -11,6 +11,8 @@ use App\Models\Central\Academia;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
 use App\Support\Academias\GestorAcademias;
+use App\Support\Academias\Certificado;
+use App\Jobs\AmpliarCertificado;
 use Illuminate\Support\Facades\Validator;
 use App\Services\Central\FacturacionAcademias;
 
@@ -46,6 +48,9 @@ class AcademiaController extends Controller
             'suspendida_por_mora' => $a->suspendida_por_mora ? 1 : 0,
             'es_administradora' => $a->es_administradora ? 1 : 0,
             'url' => $a->url(),
+            // Certificado SSL de su subdominio: listo | pendiente | error | null (no se gestiona).
+            'certificado' => $a->certificado,
+            'certificado_mensaje' => $a->certificado_mensaje,
             'fecha_creacion' => optional($a->created_at)->format('Y-m-d H:i:s'),
             'fecha_modificacion' => optional($a->updated_at)->format('Y-m-d H:i:s'),
         ];
@@ -168,6 +173,21 @@ class AcademiaController extends Controller
         $respuesta['usuario_admin'] = $datos['usuario_admin'];
         $respuesta['clave_admin'] = $clave;
         return response(get_response_body(['La academia ha sido creada.', 2], $respuesta), Response::HTTP_CREATED);
+    }
+
+    /** POST /v1/academias/{id}/certificado: vuelve a pedir el certificado SSL de su subdominio. */
+    public function reintentarCertificado($id)
+    {
+        $academia = Academia::find($id);
+        if (!$academia) {
+            return response(get_response_body(['La academia no existe.']), Response::HTTP_NOT_FOUND);
+        }
+        if (!Certificado::activo()) {
+            return response(get_response_body(['Este servidor no gestiona certificados (ACADEMIAS_CERTIFICADO vacío).']), Response::HTTP_CONFLICT);
+        }
+        Certificado::marcarPendiente($academia);
+        AmpliarCertificado::dispatch($academia->id);
+        return response(get_response_body(['Se pidió el certificado: queda listo en unos segundos.', 1], $this->formatear($academia->fresh())), Response::HTTP_OK);
     }
 
     public function update(Request $request, $id)

@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Artisan;
+use App\Jobs\AmpliarCertificado;
 use Spatie\Permission\PermissionRegistrar;
 use Database\Seeders\AcademiaMenuSeeder;
 
@@ -179,6 +180,11 @@ class GestorAcademias
         }
 
         HostsLocales::intentarActualizar();
+        // Producción: el subdominio nuevo se agrega al certificado SSL en segundo plano.
+        if (Certificado::activo()) {
+            Certificado::marcarPendiente($academia);
+            AmpliarCertificado::dispatch($academia->id);
+        }
         return $academia;
     }
 

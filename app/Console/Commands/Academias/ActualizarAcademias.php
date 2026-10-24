@@ -20,6 +20,11 @@ class ActualizarAcademias extends Command
     public function handle(): int
     {
         $fallos = 0;
+        // BD central (academias, cobro del ERP, festivos): antes de las academias.
+        $this->info('== central');
+        Artisan::call('migrate', ['--database' => 'central', '--path' => 'database/migrations/central', '--force' => true]);
+        $this->line(trim(Artisan::output()));
+
         GestorAcademias::paraCada(function (Academia $academia) use (&$fallos) {
             $this->info("== {$academia->codigo} ({$academia->base_datos})");
             try {

@@ -38,6 +38,7 @@ class Academia extends Model
         'activa' => 'boolean',
         'suspendida_por_mora' => 'boolean',
         'es_administradora' => 'boolean',
+        'certificado_fecha' => 'datetime',
     ];
 
     public function facturas()

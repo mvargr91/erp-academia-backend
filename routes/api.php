@@ -153,6 +153,7 @@ Route::group(['middleware' => ['auth:api', 'clave.vigente']], function (){
         Route::post('/', [Central\AcademiaController::class, 'store'])->name('academias.store')->middleware('permission:CrearAcademia');
         Route::get('/{id}', [Central\AcademiaController::class, 'show'])->name('academias.show')->middleware('permission:ListarAcademia');
         Route::put('/{id}', [Central\AcademiaController::class, 'update'])->name('academias.update')->middleware('permission:ModificarAcademia');
+        Route::post('/{id}/certificado', [Central\AcademiaController::class, 'reintentarCertificado'])->name('academias.certificado')->middleware('permission:ModificarAcademia');
     });
     Route::group(["middleware" => ["academia.administradora"]], function () {
         Route::get('panel-erp', [Central\PanelErpController::class, 'index'])->name('panel-erp.index')->middleware('permission:ListarPanelErp');
