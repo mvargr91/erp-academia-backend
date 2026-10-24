@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Central;
 
 use Exception;
+use DomainException;
 use Carbon\Carbon;
 use Illuminate\Support\Str;
 use Illuminate\Http\Request;
@@ -61,6 +62,8 @@ class AcademiaController extends Controller
             $datos['estado_cuenta_nombre'] = self::ESTADOS_CUENTA[$cuenta['estado']];
             $datos['saldo_pendiente'] = $cuenta['saldo'];
             $datos['alumnos_activos'] = $this->alumnosActivos($a);
+            // Para avisar antes de eliminarla: con pagos al ERP, borrarla pierde ese historial.
+            $datos['pagos_registrados'] = DB::connection('central')->table('pagos_academia')->where('academia_id', $a->id)->count();
         }
         return $datos;
     }
@@ -173,6 +176,34 @@ class AcademiaController extends Controller
         $respuesta['usuario_admin'] = $datos['usuario_admin'];
         $respuesta['clave_admin'] = $clave;
         return response(get_response_body(['La academia ha sido creada.', 2], $respuesta), Response::HTTP_CREATED);
+    }
+
+    /**
+     * DELETE /v1/academias/{id} { confirmacion: <código de la academia> }: elimina la academia y su BD,
+     * con respaldo previo (GestorAcademias::eliminar). Se confirma escribiendo el código.
+     */
+    public function destroy(Request $request, $id)
+    {
+        $academia = Academia::find($id);
+        if (!$academia) {
+            return response(get_response_body(['La academia no existe.']), Response::HTTP_NOT_FOUND);
+        }
+        if (trim((string) $request->input('confirmacion')) !== $academia->codigo) {
+            return response(get_response_body(["Para eliminarla escribe exactamente el código de la academia: {$academia->codigo}."]), Response::HTTP_BAD_REQUEST);
+        }
+
+        set_time_limit(300);
+        try {
+            $respaldo = GestorAcademias::eliminar($academia);
+        } catch (DomainException $e) {
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_CONFLICT);
+        } catch (Exception $e) {
+            return response(get_response_body(['No se pudo eliminar la academia: ' . $e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+        return response(get_response_body([
+            "Se eliminó la academia {$academia->nombre}. Quedó un respaldo de su base de datos en el servidor: {$respaldo}",
+            3,
+        ]), Response::HTTP_OK);
     }
 
     /** POST /v1/academias/{id}/certificado: vuelve a pedir el certificado SSL de su subdominio. */

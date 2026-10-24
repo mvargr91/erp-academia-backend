@@ -6,6 +6,10 @@ use Database\Seeders\ConfiguracionAcademiaSeeder;
 use App\Services\Central\FacturacionAcademias;
 use Exception;
 use Carbon\Carbon;
+use DomainException;
+use Spatie\DbDumper\Databases\MySql;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use App\Models\Central\Academia;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -189,6 +193,67 @@ class GestorAcademias
     }
 
     /** Corre las migraciones pendientes en la academia activa. Devuelve la salida de Artisan. */
+    /**
+     * Elimina la academia: su BD completa, su registro central (con sus cuentas de cobro, pagos al ERP y
+     * avisos, en cascada) y sus imágenes de Apariencia. Antes se respalda la BD en
+     * storage/app/respaldos-academias; si el respaldo falla no se borra nada. Devuelve la ruta del respaldo.
+     * El subdominio queda en el certificado SSL (quitarlo obligaría a regenerarlo para todas).
+     */
+    public static function eliminar(Academia $academia): string
+    {
+        if ($academia->es_administradora) {
+            throw new DomainException('La academia administradora no se puede eliminar.');
+        }
+        if (self::actual()?->id === $academia->id) {
+            throw new DomainException('No se puede eliminar la academia desde la que estás conectado.');
+        }
+        $baseDatos = $academia->base_datos;
+        if (!preg_match('/^[A-Za-z0-9_]+$/', $baseDatos)) {
+            throw new DomainException("Nombre de base de datos no válido: {$baseDatos}.");
+        }
+
+        $archivo = self::respaldar($academia);
+
+        DB::connection('central')->transaction(fn () => $academia->delete());
+        DB::connection('central')->statement("DROP DATABASE IF EXISTS `{$baseDatos}`");
+        Storage::disk('public')->deleteDirectory(Apariencia::carpeta($academia->codigo));
+        Log::warning("Academia eliminada: {$academia->codigo} ({$baseDatos}). Respaldo: {$archivo}");
+
+        HostsLocales::intentarActualizar();
+        return $archivo;
+    }
+
+    /** Copia completa de la BD de la academia (mysqldump). Lanza excepción si no queda el archivo. */
+    private static function respaldar(Academia $academia): string
+    {
+        $carpeta = storage_path('app/respaldos-academias');
+        if (!is_dir($carpeta)) {
+            mkdir($carpeta, 0750, true);
+        }
+        $archivo = $carpeta . DIRECTORY_SEPARATOR . $academia->codigo . '-' . Carbon::now()->format('Ymd-His') . '.sql';
+        $conexion = config('database.connections.mysql');
+        try {
+            MySql::create()
+                ->setHost($conexion['host'])
+                ->setPort((int) $conexion['port'])
+                ->setUserName($conexion['username'])
+                ->setPassword((string) $conexion['password'])
+                ->setDbName($academia->base_datos)
+                ->setDumpBinaryPath($conexion['dump']['dump_binary_path'] ?? '')
+                ->useSingleTransaction()
+                // MySQL 8 exige el privilegio PROCESS para los tablespaces; el usuario del ERP no lo tiene.
+                ->addExtraOption('--no-tablespaces')
+                ->setTimeout(300)
+                ->dumpToFile($archivo);
+        } catch (Exception $e) {
+            throw new DomainException('No se pudo hacer el respaldo de la academia, así que no se borró nada: ' . $e->getMessage());
+        }
+        if (!is_file($archivo) || filesize($archivo) === 0) {
+            throw new DomainException('El respaldo de la academia quedó vacío, así que no se borró nada.');
+        }
+        return $archivo;
+    }
+
     public static function migrar(): string
     {
         Artisan::call('migrate', ['--database' => 'mysql', '--force' => true]);
