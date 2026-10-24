@@ -107,6 +107,8 @@ class CuentaController extends Controller
             $user->save();
 
             $usuario = $user->usuario();
+            // Ya no usa la contraseña inicial que le dio el administrador.
+            DB::table('usuarios')->where('id', $usuario->id)->update(['debe_cambiar_clave' => false]);
             AuditoriaTabla::crear([
                 'id_recurso' => $usuario->id,
                 'nombre_recurso' => Usuario::class,

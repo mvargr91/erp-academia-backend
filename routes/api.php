@@ -29,7 +29,8 @@ Route::post('oauth/token', [AccessTokenController::class, 'issueToken'])->name('
 Route::get('/apariencia', [Academia\AparienciaController::class, 'show'])->name('publico.apariencia');
 
 // Las lecturas de catálogos se perfilan con Permisos::lectura (quien usa el catálogo en su opción puede leerlo).
-Route::group(['middleware' => ['auth:api']], function (){
+// clave.vigente: quien entró con una contraseña inicial solo puede cambiarla (ver ClaveVigente).
+Route::group(['middleware' => ['auth:api', 'clave.vigente']], function (){
     // User
     Route::group(["prefix" => "users"],function(){
         Route::get('current/session',  [UserController::class,'getSession'])->name('session.show');
@@ -237,6 +238,9 @@ Route::group(['middleware' => ['auth:api']], function (){
         Route::delete('/{id}', [Academia\RitmoController::class, 'destroy'])->name('ritmos.delete')->middleware('permission:EliminarRitmo');
     });
 
+    // Mis cursos: home del profesor (sus cursos para tomar asistencia o ver el calendario)
+    Route::get('mis-cursos', [Academia\MisCursosController::class, 'index'])->name('mis-cursos.index')->middleware(Permisos::lectura(['MisCursos']));
+
     // Modalidades de los cursos (clases por ciclo y duración); su precio va en Tarifas
     Route::group(["prefix" => "modalidades"], function () {
         Route::get('/', [Academia\ModalidadController::class, 'index'])->name('modalidades.index')->middleware(Permisos::lectura(['Modalidad', 'Curso', 'Tarifa']));
@@ -259,6 +263,8 @@ Route::group(['middleware' => ['auth:api']], function (){
     Route::group(["prefix" => "profesores"], function () {
         Route::get('/', [Academia\ProfesorController::class, 'index'])->name('profesores.index')->middleware(Permisos::lectura(['Profesor', 'Curso', 'ClasePrivada', 'Paquete', 'VacacionalCurso'], ['RegistrarClasesPaquete']));
         Route::post('/', [Academia\ProfesorController::class, 'store'])->name('profesores.store')->middleware('permission:CrearProfesor');
+        Route::post('/{id}/acceso', [Academia\ProfesorController::class, 'darAcceso'])->name('profesores.acceso')->middleware('permission:ModificarProfesor');
+        Route::delete('/{id}/acceso', [Academia\ProfesorController::class, 'quitarAcceso'])->name('profesores.acceso.quitar')->middleware('permission:ModificarProfesor');
         Route::get('/{id}', [Academia\ProfesorController::class, 'show'])->name('profesores.show')->middleware(Permisos::lectura(['Profesor', 'Curso', 'ClasePrivada', 'Paquete']));
         Route::put('/{id}', [Academia\ProfesorController::class, 'update'])->name('profesores.update')->middleware('permission:ModificarProfesor');
         Route::delete('/{id}', [Academia\ProfesorController::class, 'destroy'])->name('profesores.delete')->middleware('permission:EliminarProfesor');
@@ -284,7 +290,7 @@ Route::group(['middleware' => ['auth:api']], function (){
     Route::group(["prefix" => "cursos"], function () {
         Route::get('/', [Academia\CursoController::class, 'index'])->name('cursos.index')->middleware(Permisos::lectura(['Curso', 'Pago', 'Asistencia', 'TomaAsistencia', 'Matricula', 'EnvioCorreo']));
         Route::post('/', [Academia\CursoController::class, 'store'])->name('cursos.store')->middleware('permission:CrearCurso');
-        Route::get('/{id}/calendario', [Academia\CalendarioController::class, 'curso'])->name('cursos.calendario')->middleware(Permisos::lectura(['Curso']));
+        Route::get('/{id}/calendario', [Academia\CalendarioController::class, 'curso'])->name('cursos.calendario')->middleware(Permisos::lectura(['Curso', 'MisCursos']));
         Route::post('/{id}/festivos-habilitados', [Academia\CalendarioController::class, 'habilitarFestivo'])->name('cursos.festivos.habilitar')->middleware('permission:ModificarCurso');
         Route::delete('/{id}/festivos-habilitados/{fecha}', [Academia\CalendarioController::class, 'deshabilitarFestivo'])->name('cursos.festivos.deshabilitar')->middleware('permission:ModificarCurso');
         Route::put('/{id}/alumnos/{alumnoId}/valor-especial', [Academia\CalendarioController::class, 'valorEspecial'])->name('cursos.valor-especial')->middleware('permission:ValorEspecialCurso');

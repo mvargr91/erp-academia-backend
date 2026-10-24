@@ -23,6 +23,13 @@ return [
     // BD de la que se copian los clientes OAuth (Passport) a cada academia nueva.
     'bd_plantilla' => env('DB_DATABASE'),
 
+    /*
+    | index.html del frontend ya compilado. El servidor web lo pide a /pagina-academia para que la
+    | página salga con el nombre, el texto, el logo y el ícono de cada academia (vista previa al
+    | compartir el enlace, que no ejecuta JavaScript). Ver PaginaAcademiaController.
+    */
+    'frontend_index' => env('FRONTEND_INDEX', '/var/www/erp-frontend/index.html'),
+
     // Subdominios que nunca corresponden a una academia.
     'subdominios_reservados' => ['www', 'api', 'mail'],
 

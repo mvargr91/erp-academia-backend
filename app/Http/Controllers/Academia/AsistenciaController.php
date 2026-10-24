@@ -10,6 +10,7 @@ use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
 use App\Models\Academia\Asistencia;
+use App\Models\Academia\Profesor;
 use Illuminate\Support\Facades\Validator;
 
 class AsistenciaController extends Controller
@@ -37,6 +38,9 @@ class AsistenciaController extends Controller
             if (isset($datos['ordenar_por'])) {
                 $datos['ordenar_por'] = format_order_by_attributes($datos);
             }
+            if ($profesorId = Profesor::soloSusCursos()) {
+                $datos['profesor_id'] = $profesorId;
+            }
             return response(Asistencia::obtenerColeccion($datos), Response::HTTP_OK);
         } catch (Exception $e) {
             return response($e->getMessage(), Response::HTTP_INTERNAL_SERVER_ERROR);
@@ -53,6 +57,10 @@ class AsistenciaController extends Controller
                 return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
             }
 
+            if ($error = $this->errorDeProfesor((int) $datos['curso_id'], $datos['fecha_sesion'])) {
+                DB::rollback();
+                return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
+            }
             if ($error = $this->errorDeFecha($datos)) {
                 DB::rollback();
                 return response(get_response_body([$error]), Response::HTTP_BAD_REQUEST);
@@ -81,6 +89,25 @@ class AsistenciaController extends Controller
         }
     }
 
+    /**
+     * Un profesor que solo ve sus cursos toma o corrige la asistencia de esos cursos y solo de los
+     * últimos días (lo anterior lo corrige el administrador). null = puede.
+     */
+    private function errorDeProfesor(int $cursoId, ?string $fecha = null): ?string
+    {
+        if (Profesor::soloSusCursos() === null) {
+            return null;
+        }
+        if (Profesor::cursoAjeno($cursoId)) {
+            return 'Solo puedes tomar asistencia de tus cursos.';
+        }
+        $dias = Profesor::DIAS_CORRECCION_ASISTENCIA;
+        if ($fecha && Carbon::parse($fecha)->lt(Carbon::today()->subDays($dias))) {
+            return "Solo puedes tomar o corregir la asistencia de los últimos {$dias} días. Para fechas anteriores, pídeselo al administrador.";
+        }
+        return null;
+    }
+
     /** La asistencia solo se toma en fechas de clase del curso (su día, sin festivos ni cierres). */
     private function errorDeFecha(array $datos): ?string
     {
@@ -103,6 +130,12 @@ class AsistenciaController extends Controller
             return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
         }
 
+        if ($error = $this->errorDeProfesor((int) $request->curso_id)) {
+            return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
+        }
+        // El profesor no ve lo que deben sus alumnos: es información de cobro.
+        $verSaldo = Profesor::soloSusCursos() === null;
+
         $curso = DB::table('cursos as c')
             ->where('c.id', $request->curso_id)
             ->select('c.id', 'c.sede_id', 'c.dia', 'c.fecha_inicio', 'c.modalidad_id')
@@ -120,7 +153,7 @@ class AsistenciaController extends Controller
                 'ca.fecha_matricula', 'ca.ciclo_inicio', 'ca.saldo')
             ->orderBy('a.nombres')
             ->get()
-            ->map(function ($m) use ($calendario, $curso, $clasesPorCiclo, $fecha, $validacion) {
+            ->map(function ($m) use ($calendario, $curso, $clasesPorCiclo, $fecha, $validacion, $verSaldo) {
                 $numero = null;
                 $total = $clasesPorCiclo;
                 if ($validacion['valida']) {
@@ -139,7 +172,7 @@ class AsistenciaController extends Controller
                     'nombre' => $m->nombre,
                     'clase_numero' => $numero,
                     'clases_ciclo' => $total,
-                    'saldo' => (float) $m->saldo,
+                    'saldo' => $verSaldo ? (float) $m->saldo : null,
                 ];
             });
 
@@ -169,7 +202,7 @@ class AsistenciaController extends Controller
                         'nombre' => $a->nombre,
                         'clase_numero' => null,
                         'clases_ciclo' => $clasesPorCiclo,
-                        'saldo' => 0.0,
+                        'saldo' => $verSaldo ? 0.0 : null,
                         'presente' => (bool) $marcados[$a->id],
                         'retirado' => true,
                     ])
@@ -189,6 +222,9 @@ class AsistenciaController extends Controller
             $validator = Validator::make($datos, ['id' => 'integer|required|exists:asistencias,id']);
             if ($validator->fails()) {
                 return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+            }
+            if ($error = $this->errorDeProfesor((int) DB::table('asistencias')->where('id', $id)->value('curso_id'))) {
+                return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
             }
             return response(Asistencia::cargar($id), Response::HTTP_OK);
         } catch (Exception $e) {
@@ -212,6 +248,12 @@ class AsistenciaController extends Controller
 
             // Solo se valida el calendario si cambia la fecha o el curso (las ya tomadas se pueden corregir).
             $actual = DB::table('asistencias')->where('id', $id)->first();
+            $error = $this->errorDeProfesor((int) $actual->curso_id, $actual->fecha_sesion)
+                ?? $this->errorDeProfesor((int) $datos['curso_id'], $datos['fecha_sesion']);
+            if ($error) {
+                DB::rollback();
+                return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
+            }
             $cambioFecha = Carbon::parse($actual->fecha_sesion)->toDateString() !== Carbon::parse($datos['fecha_sesion'])->toDateString()
                 || (int) $actual->curso_id !== (int) $datos['curso_id'];
             if ($cambioFecha && ($error = $this->errorDeFecha($datos))) {

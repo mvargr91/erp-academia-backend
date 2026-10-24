@@ -55,6 +55,9 @@ class Asistencia extends Model
         if (isset($dto['curso_id'])) {
             $query->where('asistencias.curso_id', $dto['curso_id']);
         }
+        if (isset($dto['profesor_id'])) {
+            $query->where('cursos.profesor_id', $dto['profesor_id']);
+        }
         if (isset($dto['fecha_sesion'])) {
             $query->where('asistencias.fecha_sesion', $dto['fecha_sesion']);
         }

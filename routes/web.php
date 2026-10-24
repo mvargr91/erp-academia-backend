@@ -8,6 +8,10 @@ Route::get('/', function () {
     return view('welcome');
 });
 
+// index.html del frontend con la marca de la academia del subdominio (vista previa al compartir el enlace).
+// El servidor web lo pide en lugar de servir el index.html estático: ver PaginaAcademiaController.
+Route::get('/pagina-academia', \App\Http\Controllers\PaginaAcademiaController::class)->name('pagina-academia');
+
 // Logos e imagen de login de cada academia (el nombre del archivo cambia en cada subida: caché larga).
 Route::get('/marca/{codigo}/{archivo}', function (string $codigo, string $archivo) {
     $ruta = Apariencia::carpeta($codigo) . '/' . $archivo;

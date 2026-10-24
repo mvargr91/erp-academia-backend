@@ -36,12 +36,16 @@ class AparienciaController extends Controller
             'logo' => $imagen . '|max:2048',
             'logo_oscuro' => $imagen . '|max:2048',
             'login_fondo' => $imagen . '|max:5120',
+            'icono' => $imagen . '|max:1024',
+            'descripcion' => 'nullable|string|max:200',
         ], [
             'regex' => 'El color debe tener el formato #RRGGBB.',
             'mimes' => 'La imagen debe ser PNG, JPG o WEBP.',
             'logo.max' => 'El logo no puede pesar más de 2 MB.',
             'logo_oscuro.max' => 'El logo para modo oscuro no puede pesar más de 2 MB.',
             'login_fondo.max' => 'La imagen de fondo no puede pesar más de 5 MB.',
+            'icono.max' => 'El ícono no puede pesar más de 1 MB.',
+            'descripcion.max' => 'El texto al compartir no puede tener más de 200 caracteres.',
         ]);
         if ($validator->fails()) {
             return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);

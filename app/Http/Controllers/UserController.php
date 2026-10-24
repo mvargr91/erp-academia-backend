@@ -236,6 +236,8 @@ class UserController extends Controller
                     'nombre' => $user->name,
                     'correo_electronico' => $usuario->correo_electronico,
                     'identificacion_usuario' => $usuario->identificacion_usuario,
+                    // Entró con la contraseña inicial que le dio el administrador: debe cambiarla.
+                    'debe_cambiar_clave' => (bool) ($usuario->debe_cambiar_clave ?? false),
                     'rol' => [
                         'id'=>$rol->id,
                         'nombre' => $rol->name,

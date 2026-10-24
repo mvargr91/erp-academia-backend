@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\ApiMiddleware;
+use App\Http\Middleware\ClaveVigente;
 use App\Http\Middleware\IdentificarAcademia;
 use App\Http\Middleware\SoloAcademiaAdministradora;
 use Illuminate\Foundation\Application;
@@ -30,6 +31,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
             'role' => \Spatie\Permission\Middleware\RoleMiddleware::class,
             'academia.administradora' => SoloAcademiaAdministradora::class,
+            'clave.vigente' => ClaveVigente::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

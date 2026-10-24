@@ -51,6 +51,7 @@ class Curso extends Model
             ->leftJoin('sedes', 'sedes.id', '=', 'cursos.sede_id')
             ->select('cursos.id', DB::raw("{$nombre} as nombre"), 'cursos.sede_id')
             ->where('cursos.estado', 1)
+            ->when($dto['profesor_id'] ?? null, fn ($q, $id) => $q->where('cursos.profesor_id', $id))
             ->orderBy('ritmos.nombre', 'asc');
         return Sede::filtrar($query, 'cursos.sede_id')->get();
     }

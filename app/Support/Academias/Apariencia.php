@@ -23,6 +23,8 @@ class Apariencia
         'login_titulo' => '',
         'login_subtitulo' => '',
         'login_posicion' => 'izquierda',
+        // Texto de la vista previa al compartir el enlace (WhatsApp, redes) y de los buscadores.
+        'descripcion' => '',
     ];
 
     public const MODOS = ['claro', 'oscuro'];
@@ -30,7 +32,29 @@ class Apariencia
     public const POSICIONES = ['izquierda', 'centro', 'derecha'];
 
     /** Imágenes configurables: campo => prefijo del archivo. */
-    public const IMAGENES = ['logo' => 'logo', 'logo_oscuro' => 'logo-oscuro', 'login_fondo' => 'login'];
+    public const IMAGENES = ['logo' => 'logo', 'logo_oscuro' => 'logo-oscuro', 'login_fondo' => 'login', 'icono' => 'icono'];
+
+    /**
+     * Datos de la página para el navegador y para la vista previa al compartir el enlace: nombre, texto,
+     * imagen (el logo) e ícono (el de la academia o, si no subió uno, el logo). Sin imágenes propias se
+     * usan las del ERP, que están en el frontend ($origen = https://<academia>.<dominio>).
+     *
+     * @return array{titulo: string, descripcion: string, imagen: string, icono: string, color: string, url: string}
+     */
+    public static function paraPagina(Academia $academia, string $origen, string $url): array
+    {
+        $datos = self::de($academia);
+        $origen = rtrim($origen, '/');
+        $descripcion = trim($datos['descripcion'] ?: $datos['login_subtitulo'] ?: '');
+        return [
+            'titulo' => $academia->nombre,
+            'descripcion' => $descripcion !== '' ? $descripcion : "Ingresa al sistema de {$academia->nombre}.",
+            'imagen' => $datos['logo_url'] ?: $datos['icono_url'] ?: "{$origen}/brand/logo.png",
+            'icono' => $datos['icono_url'] ?: $datos['logo_url'] ?: "{$origen}/brand/favicon-192.png",
+            'color' => $datos['color_menu'],
+            'url' => $url,
+        ];
+    }
 
     /** Apariencia completa (con valores por defecto y URLs de las imágenes) para el frontend. */
     public static function de(Academia $academia): array

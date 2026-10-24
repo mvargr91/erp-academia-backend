@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\Academia\Curso;
+use App\Models\Academia\Profesor;
 use Illuminate\Support\Facades\Validator;
 use App\Services\Academia\CalendarioCurso;
 use App\Support\Configuracion\Configuracion;
@@ -28,6 +29,9 @@ class CalendarioController extends Controller
             ->first();
         if (!$curso) {
             return response(get_response_body(['El curso no existe.']), Response::HTTP_NOT_FOUND);
+        }
+        if (Profesor::cursoAjeno((int) $curso->id)) {
+            return response(get_response_body(['Solo puedes ver el calendario de tus cursos.']), Response::HTTP_FORBIDDEN);
         }
         // En una mensualidad la clase que cae en festivo o cierre no se repone (no se corre).
         $mensual = CalendarioCurso::esMensual($curso);

@@ -8,6 +8,7 @@ use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
 use App\Models\Academia\Curso;
+use App\Models\Academia\Profesor;
 use App\Models\Academia\Sede;
 use Illuminate\Support\Facades\Validator;
 
@@ -40,6 +41,10 @@ class CursoController extends Controller
     {
         try {
             $datos = $request->all();
+            // Un profesor que solo ve sus cursos (Tomar asistencia, Mis cursos) recibe solo esos.
+            if ($profesorId = Profesor::soloSusCursos()) {
+                $datos['profesor_id'] = $profesorId;
+            }
             if (!$request->ligera) {
                 $validator = Validator::make($datos, ['limite' => 'integer|between:1,500']);
                 if ($validator->fails()) {

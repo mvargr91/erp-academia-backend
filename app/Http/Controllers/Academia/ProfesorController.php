@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Academia;
 
 use Exception;
+use DomainException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
@@ -50,7 +51,7 @@ class ProfesorController extends Controller
         try {
             $datos = $request->all();
             $validator = Validator::make($datos, [
-                'usuario_id' => 'integer|nullable|exists:usuarios,id',
+                'usuario_id' => 'integer|nullable|exists:usuarios,id|unique:profesores,usuario_id',
                 'nombres' => 'string|required|max:100',
                 'apellidos' => 'string|required|max:100',
                 'documento' => 'string|nullable|max:30',
@@ -58,7 +59,8 @@ class ProfesorController extends Controller
                 'correo' => 'email|required|max:150',
                 'especialidad' => 'string|nullable|max:150',
                 'estado' => 'boolean|required',
-            ], ['correo.required' => 'El correo es obligatorio.', 'correo.email' => 'El correo no es válido.']);
+            ], ['correo.required' => 'El correo es obligatorio.', 'correo.email' => 'El correo no es válido.',
+                'usuario_id.unique' => 'Ese usuario ya está enlazado a otro profesor.']);
             CorreoUnico::validarPersona($validator, 'profesores', $datos);
 
             if ($validator->fails()) {
@@ -80,6 +82,49 @@ class ProfesorController extends Controller
                 DB::rollback();
                 return response(get_response_body(['Ocurrió un error al intentar crear el profesor.']), Response::HTTP_CONFLICT);
             }
+        } catch (Exception $e) {
+            DB::rollback();
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * POST /v1/profesores/{id}/acceso { clave }: crea (o enlaza) la cuenta con la que el profesor entra
+     * al ERP con su correo y esa contraseña inicial, que deberá cambiar al entrar.
+     */
+    public function darAcceso(Request $request, $id)
+    {
+        $validator = Validator::make($request->all() + ['id' => $id], [
+            'id' => 'integer|required|exists:profesores,id',
+            'clave' => 'string|required|min:8|max:32',
+        ], ['clave.required' => 'Escribe la contraseña inicial.', 'clave.min' => 'La contraseña debe tener al menos 8 caracteres.']);
+        if ($validator->fails()) {
+            return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+        }
+        return $this->acceso($id, fn () => Profesor::darAcceso((int) $id, $request->input('clave')));
+    }
+
+    /** DELETE /v1/profesores/{id}/acceso: quita el acceso al ERP (ver Profesor::quitarAcceso). */
+    public function quitarAcceso($id)
+    {
+        $validator = Validator::make(['id' => $id], ['id' => 'integer|required|exists:profesores,id']);
+        if ($validator->fails()) {
+            return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+        }
+        return $this->acceso($id, fn () => Profesor::quitarAcceso((int) $id));
+    }
+
+    /** Ejecuta el cambio de acceso en una transacción y devuelve el profesor actualizado. */
+    private function acceso($id, callable $cambio)
+    {
+        DB::beginTransaction();
+        try {
+            $mensaje = $cambio();
+            DB::commit();
+            return response(get_response_body([$mensaje, 1], Profesor::cargar($id)), Response::HTTP_OK);
+        } catch (DomainException $e) {
+            DB::rollback();
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_CONFLICT);
         } catch (Exception $e) {
             DB::rollback();
             return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
@@ -115,7 +160,7 @@ class ProfesorController extends Controller
             $datos['id'] = $id;
             $validator = Validator::make($datos, [
                 'id' => 'integer|required|exists:profesores,id',
-                'usuario_id' => 'integer|nullable|exists:usuarios,id',
+                'usuario_id' => 'integer|nullable|exists:usuarios,id|unique:profesores,usuario_id,' . $id,
                 'nombres' => 'string|required|max:100',
                 'apellidos' => 'string|required|max:100',
                 'documento' => 'string|nullable|max:30',
@@ -123,7 +168,8 @@ class ProfesorController extends Controller
                 'correo' => 'email|required|max:150',
                 'especialidad' => 'string|nullable|max:150',
                 'estado' => 'boolean|required',
-            ], ['correo.required' => 'El correo es obligatorio.', 'correo.email' => 'El correo no es válido.']);
+            ], ['correo.required' => 'El correo es obligatorio.', 'correo.email' => 'El correo no es válido.',
+                'usuario_id.unique' => 'Ese usuario ya está enlazado a otro profesor.']);
             CorreoUnico::validarPersona($validator, 'profesores', $datos, (int) $id);
 
             if ($validator->fails()) {

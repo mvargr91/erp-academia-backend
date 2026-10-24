@@ -31,6 +31,8 @@ class AcademiaMenuSeeder extends Seeder
     // por rol como cualquier otro.
     private const MENU = [
         'Academia' => ['school', 5, [
+            // Home del profesor; primera del menú para que sea a donde entra quien solo tiene esto y Tomar asistencia.
+            ['Mis cursos', '/mis-cursos', 'co_present', 'MisCursos'],
             ['Alumnos', '/alumnos', 'groups', 'Alumno', ['EstadoCuenta' => 'Listar', 'Exportar' => 'Listar']],
             ['Matrícula rápida', '/matriculas', 'how_to_reg', 'Matricula'],
             ['Profesores', '/profesores', 'person', 'Profesor', ['Exportar' => 'Listar']],
@@ -67,6 +69,11 @@ class AcademiaMenuSeeder extends Seeder
             ['Apariencia', '/apariencia', 'palette', 'Apariencia'],
         ]],
     ];
+
+    // Rol listo para los profesores: solo ven sus cursos y toman asistencia. Se crea una vez con estos
+    // permisos; después la academia lo ajusta en Seguridad → Roles como cualquier otro.
+    private const ROL_PROFESOR = 'Profesor';
+    private const PERMISOS_PROFESOR = ['ListarMisCursos', 'ListarTomaAsistencia', 'CrearTomaAsistencia', 'ModificarTomaAsistencia'];
 
     // Permisos propios de opciones que no siembra este menú (las de Seguridad): url => [entidad, permisos propios].
     private const OTRAS_OPCIONES = [
@@ -135,9 +142,37 @@ class AcademiaMenuSeeder extends Seeder
                     $this->registrarPropios($opcionId, $entidad, $propios, $ahora);
                 }
             }
+
+            $this->crearRolProfesor($ahora);
         });
 
         GestorAcademias::olvidarCachePermisos();
+    }
+
+    /** Crea el rol Profesor con sus permisos si la academia aún no lo tiene (no toca uno ya existente). */
+    private function crearRolProfesor(Carbon $ahora): void
+    {
+        $llave = ['name' => self::ROL_PROFESOR, 'guard_name' => 'api'];
+        if (DB::table('roles')->where($llave)->exists()) {
+            return;
+        }
+        $permisos = DB::table('permissions')->where('guard_name', 'api')->whereIn('name', self::PERMISOS_PROFESOR)->pluck('id');
+        if ($permisos->count() !== count(self::PERMISOS_PROFESOR)) {
+            return; // El menú de esta academia no tiene esas opciones.
+        }
+        $rolId = DB::table('roles')->insertGetId($llave + [
+            'type' => 'IN',
+            'status' => true,
+            'creation_user_id' => 1,
+            'creation_user_name' => 'SuperUser',
+            'modification_user_id' => 1,
+            'modification_user_name' => 'SuperUser',
+            'created_at' => $ahora,
+            'updated_at' => $ahora,
+        ]);
+        foreach ($permisos as $permisoId) {
+            DB::table('role_has_permissions')->insertOrIgnore(['permission_id' => $permisoId, 'role_id' => $rolId]);
+        }
     }
 
     /** @param array $propios  ['Titulo'] o ['Titulo' => 'Padre'] */
