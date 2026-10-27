@@ -69,51 +69,52 @@ class Profesor extends Model
     public const ROL = 'Profesor';
 
     /**
-     * Da acceso al ERP al profesor: su cuenta entra con su correo y la contraseña inicial que define el
-     * administrador, que deberá cambiar al entrar. Si ya hay una cuenta con ese correo:
-     *  - activa (p. ej. un administrador que también dicta clases): solo se enlaza, sin tocar su clave ni su rol;
-     *  - desactivada (se le quitó el acceso antes): se reactiva con la contraseña nueva.
+     * Da acceso al ERP al profesor: su cuenta entra con el nombre de usuario y la contraseña inicial que
+     * define el administrador, que deberá cambiar al entrar. Su correo queda como dato de contacto.
+     * El nombre de usuario no puede estar en uso, salvo que sea una cuenta de profesor desactivada (se le
+     * quitó el acceso antes) y libre: esa se reactiva con la contraseña nueva.
      * Devuelve el mensaje para el administrador.
      */
-    public static function darAcceso(int $id, string $clave): string
+    public static function darAcceso(int $id, string $usuario, string $clave): string
     {
         $profesor = DB::table('profesores')->find($id);
-        $correo = trim((string) $profesor->correo);
-        if ($correo === '') {
-            throw new DomainException('El profesor necesita un correo: es con lo que va a entrar al ERP.');
+        $actual = $profesor->usuario_id ? DB::table('usuarios')->find($profesor->usuario_id) : null;
+        if ($actual && $actual->estado) {
+            throw new DomainException("El profesor ya tiene acceso con el usuario «{$actual->identificacion_usuario}». Quítale el acceso antes de darle otro.");
         }
+        $usuario = mb_strtolower(trim($usuario));
         $rolId = DB::table('roles')->where('name', self::ROL)->where('guard_name', 'api')->value('id');
         if (!$rolId) {
             throw new DomainException('No existe el rol Profesor. Créalo en Seguridad → Roles.');
         }
 
-        $existente = DB::table('usuarios')->where('identificacion_usuario', $correo)->orWhere('correo_electronico', $correo)->first();
-        if ($existente) {
-            $otro = DB::table('profesores')->where('usuario_id', $existente->id)->where('id', '!=', $id)->exists();
-            if ($otro) {
-                throw new DomainException("La cuenta {$existente->identificacion_usuario} ya es de otro profesor.");
-            }
-            DB::table('profesores')->where('id', $id)->update(['usuario_id' => $existente->id, 'updated_at' => Carbon::now()]);
-            if ($existente->estado) {
-                return "Se enlazó la cuenta que ya existía ({$existente->identificacion_usuario}): entra con su contraseña de siempre.";
+        $existente = DB::table('usuarios')->where('identificacion_usuario', $usuario)->first();
+        if ($existente || DB::table('users')->where('email', $usuario)->exists()) {
+            $user = $existente ? User::find($existente->user_id) : null;
+            $reactivable = $existente && !$existente->estado && $user
+                && $user->hasRole(self::ROL, 'api') && $user->getRoleNames()->count() === 1
+                && !DB::table('profesores')->where('usuario_id', $existente->id)->where('id', '!=', $id)->exists();
+            if (!$reactivable) {
+                throw new DomainException("El usuario «{$usuario}» ya existe. Elige otro nombre de usuario.");
             }
             DB::table('users')->where('id', $existente->user_id)->update(['password' => Hash::make($clave)]);
             DB::table('usuarios')->where('id', $existente->id)->update(['estado' => 1, 'debe_cambiar_clave' => true, 'updated_at' => Carbon::now()]);
-            return "Se reactivó el acceso. Entra con {$existente->identificacion_usuario} y la contraseña que definiste; al entrar deberá cambiarla.";
+            DB::table('profesores')->where('id', $id)->update(['usuario_id' => $existente->id, 'updated_at' => Carbon::now()]);
+            return "Se reactivó el acceso. Entra con el usuario «{$usuario}» y la contraseña que definiste; al entrar deberá cambiarla.";
         }
 
         Usuario::modificarOCrear([
             'nombre' => trim("{$profesor->nombres} {$profesor->apellidos}"),
-            'correo_electronico' => $correo,
-            'identificacion_usuario' => $correo,
+            'correo_electronico' => trim((string) $profesor->correo),
+            'identificacion_usuario' => $usuario,
             'rol_id' => $rolId,
             'clave' => $clave,
             'estado' => 1,
         ]);
-        $usuarioId = DB::table('usuarios')->where('identificacion_usuario', $correo)->value('id');
+        $usuarioId = DB::table('usuarios')->where('identificacion_usuario', $usuario)->value('id');
         DB::table('usuarios')->where('id', $usuarioId)->update(['debe_cambiar_clave' => true]);
         DB::table('profesores')->where('id', $id)->update(['usuario_id' => $usuarioId, 'updated_at' => Carbon::now()]);
-        return "Listo. Entra con {$correo} y la contraseña que definiste; al entrar deberá cambiarla.";
+        return "Listo. Entra con el usuario «{$usuario}» y la contraseña que definiste; al entrar deberá cambiarla.";
     }
 
     /**

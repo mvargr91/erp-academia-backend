@@ -89,19 +89,29 @@ class ProfesorController extends Controller
     }
 
     /**
-     * POST /v1/profesores/{id}/acceso { clave }: crea (o enlaza) la cuenta con la que el profesor entra
-     * al ERP con su correo y esa contraseña inicial, que deberá cambiar al entrar.
+     * POST /v1/profesores/{id}/acceso { usuario, clave }: crea la cuenta con la que el profesor entra al ERP
+     * con ese nombre de usuario y esa contraseña inicial, que deberá cambiar al entrar.
      */
     public function darAcceso(Request $request, $id)
     {
-        $validator = Validator::make($request->all() + ['id' => $id], [
+        $datos = ['usuario' => mb_strtolower(trim((string) $request->input('usuario')))] + $request->all() + ['id' => $id];
+        $validator = Validator::make($datos, [
             'id' => 'integer|required|exists:profesores,id',
+            // Con lo que entra al ERP: minúsculas, números, punto, guion y guion bajo.
+            'usuario' => ['required', 'string', 'min:4', 'max:50', 'regex:/^[a-z0-9._-]+$/'],
             'clave' => 'string|required|min:8|max:32',
-        ], ['clave.required' => 'Escribe la contraseña inicial.', 'clave.min' => 'La contraseña debe tener al menos 8 caracteres.']);
+        ], [
+            'usuario.required' => 'Escribe el nombre de usuario.',
+            'usuario.min' => 'El nombre de usuario debe tener al menos 4 caracteres.',
+            'usuario.max' => 'El nombre de usuario no puede tener más de 50 caracteres.',
+            'usuario.regex' => 'El nombre de usuario solo puede tener letras sin tildes, números, punto, guion y guion bajo (sin espacios).',
+            'clave.required' => 'Escribe la contraseña inicial.',
+            'clave.min' => 'La contraseña debe tener al menos 8 caracteres.',
+        ]);
         if ($validator->fails()) {
             return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
         }
-        return $this->acceso($id, fn () => Profesor::darAcceso((int) $id, $request->input('clave')));
+        return $this->acceso($id, fn () => Profesor::darAcceso((int) $id, $datos['usuario'], $request->input('clave')));
     }
 
     /** DELETE /v1/profesores/{id}/acceso: quita el acceso al ERP (ver Profesor::quitarAcceso). */
