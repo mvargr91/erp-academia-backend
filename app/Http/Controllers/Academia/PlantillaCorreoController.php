@@ -21,6 +21,14 @@ use App\Services\Academia\EnviosCorreo;
  */
 class PlantillaCorreoController extends Controller
 {
+    private const MENSAJES = [
+        'nombre.required' => 'Escribe el nombre de la plantilla.',
+        'nombre.max' => 'El nombre no puede tener más de 128 caracteres.',
+        'asunto.required' => 'Escribe el asunto.',
+        'asunto.max' => 'El asunto no puede tener más de 128 caracteres.',
+        'texto.required' => 'Escribe el contenido o inserta una imagen.',
+    ];
+
     private function formatear(object $p): array
     {
         return [
@@ -81,7 +89,7 @@ class PlantillaCorreoController extends Controller
             'asunto' => 'required|string|max:128',
             'texto' => 'required|string',
             'estado' => 'required|boolean',
-        ]);
+        ], self::MENSAJES);
         if ($validator->fails()) {
             return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
         }
@@ -129,7 +137,7 @@ class PlantillaCorreoController extends Controller
             'asunto' => 'required|string|max:128',
             'texto' => 'required|string',
             'estado' => 'required|boolean',
-        ]);
+        ], self::MENSAJES);
         if ($validator->fails()) {
             return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
         }

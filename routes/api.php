@@ -137,6 +137,10 @@ Route::group(['middleware' => ['auth:api', 'clave.vigente']], function (){
         Route::delete('/{id}', [Academia\PlantillaCorreoController::class, 'destroy'])->name('plantillas-correo.delete')->middleware('permission:EliminarPlantillaCorreo');
     });
 
+    // Imágenes dentro del contenido de los correos (editor de envíos y plantillas)
+    Route::post('correo-imagenes', [Academia\ImagenCorreoController::class, 'store'])->name('correo-imagenes.store')
+        ->middleware('permission:CrearEnvioCorreo|CrearPlantillaCorreo|ModificarPlantillaCorreo');
+
     // Envíos de correo manuales/masivos
     Route::group(["prefix" => "envios-correo"], function () {
         Route::get('/', [Academia\EnvioCorreoController::class, 'index'])->name('envios-correo.index')->middleware('permission:ListarEnvioCorreo');
