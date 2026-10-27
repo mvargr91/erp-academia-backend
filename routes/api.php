@@ -137,6 +137,12 @@ Route::group(['middleware' => ['auth:api', 'clave.vigente']], function (){
         Route::delete('/{id}', [Academia\PlantillaCorreoController::class, 'destroy'])->name('plantillas-correo.delete')->middleware('permission:EliminarPlantillaCorreo');
     });
 
+    // Datos de contacto de la academia (pie de los correos y a dónde responden los alumnos)
+    Route::get('datos-academia', [Academia\DatosAcademiaController::class, 'show'])->name('datos-academia.show')
+        ->middleware(Permisos::lectura(['DatosAcademia']));
+    Route::put('datos-academia', [Academia\DatosAcademiaController::class, 'update'])->name('datos-academia.update')
+        ->middleware('permission:ModificarDatosAcademia');
+
     // Imágenes dentro del contenido de los correos (editor de envíos y plantillas)
     Route::post('correo-imagenes', [Academia\ImagenCorreoController::class, 'store'])->name('correo-imagenes.store')
         ->middleware('permission:CrearEnvioCorreo|CrearPlantillaCorreo|ModificarPlantillaCorreo');

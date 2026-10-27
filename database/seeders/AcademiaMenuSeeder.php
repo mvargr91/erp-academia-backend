@@ -59,6 +59,7 @@ class AcademiaMenuSeeder extends Seeder
             ['Pagos vacacionales', '/vacacionales-pagos', 'payments', 'VacacionalPago', ['VerInscripcion', 'Exportar' => 'Listar']],
         ]],
         'Configuración Academia' => ['settings', 7, [
+            ['Datos de contacto', '/datos-academia', 'contact_mail', 'DatosAcademia'],
             ['Sedes', '/sedes', 'store', 'Sede', ['Exportar' => 'Listar']],
             ['Ritmos', '/ritmos', 'music_note', 'Ritmo', ['Exportar' => 'Listar']],
             ['Modalidades', '/modalidades', 'view_module', 'Modalidad', ['Exportar' => 'Listar']],
