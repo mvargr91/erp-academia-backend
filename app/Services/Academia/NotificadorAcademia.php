@@ -126,9 +126,15 @@ class NotificadorAcademia
         }
     }
 
-    /** Saludo de cumpleaños (los nacidos un 29 de febrero se saludan el 28 en años no bisiestos). */
+    /**
+     * Saludo de cumpleaños (los nacidos un 29 de febrero se saludan el 28 en años no bisiestos).
+     * Se apaga dejando inactiva la plantilla «Feliz cumpleaños» (Configuración → Plantillas de correo).
+     */
     private function cumpleanos(array &$resumen): void
     {
+        if (DB::table('parametros_correos')->where('codigo', 'CUMPLEANOS')->where('estado', 0)->exists()) {
+            return;
+        }
         $febrero28NoBisiesto = $this->hoy->month === 2 && $this->hoy->day === 28 && !$this->hoy->isLeapYear();
         $alumnos = DB::table('alumnos')
             ->where('estado', 1)

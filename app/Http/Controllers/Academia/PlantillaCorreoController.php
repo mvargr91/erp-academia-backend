@@ -181,6 +181,12 @@ class PlantillaCorreoController extends Controller
             ])->render();
         } elseif ($plantilla->codigo === 'RECUPERAR_CLAVE') {
             $html = view('emails.reset-password', ['texto' => $render['html']])->render();
+        } elseif ($plantilla->codigo === 'CUMPLEANOS') {
+            $html = view('emails.academia.cumpleanos', [
+                'cuerpo' => $render['html'],
+                'academia' => ['nombre' => $academia?->nombre ?? 'Academia', 'correo' => $academia?->correo, 'telefono' => $academia?->telefono],
+                'datos' => ['alumno' => 'Ana Pérez'],
+            ])->render();
         } else {
             $html = view('emails.academia.plantilla', [
                 'cuerpo' => $render['html'],

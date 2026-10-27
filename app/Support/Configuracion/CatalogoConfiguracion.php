@@ -130,8 +130,10 @@ class CatalogoConfiguracion
             'CUMPLEANOS' => [
                 'Feliz cumpleaños',
                 '¡Feliz cumpleaños, {alumno}! 🎉',
-                '<p>Todo el equipo de <strong>{academia}</strong> te desea un muy feliz cumpleaños.</p>'
-                . '<p>¡Que lo celebres bailando! Te esperamos en clase.</p>',
+                // Va debajo de la tarjeta de celebración (emails/academia/cumpleanos), centrado.
+                '<p>Hoy en <strong>{academia}</strong> celebramos contigo y te deseamos un día lleno de música y alegría.</p>'
+                . '<p>Que este nuevo año venga con muchos pasos nuevos. Gracias por bailar con nosotros.</p>'
+                . '<p><strong>¡Te esperamos en la pista para celebrarlo!</strong></p>',
                 $alumno + $academia,
             ],
             'RECUPERAR_CLAVE' => [

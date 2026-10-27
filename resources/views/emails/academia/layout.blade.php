@@ -40,8 +40,9 @@
                 </tr>
                 <tr>
                     <td style="padding:24px; font-size:15px; line-height:1.6;">
-                        {{-- El saludo lo pone el diseño solo en los correos al alumno; los demás lo traen en su texto. --}}
-                        @if(!empty($datos['alumno']))
+                        {{-- El saludo lo pone el diseño solo en los correos al alumno; los demás lo traen en su texto.
+                             El de cumpleaños pone el nombre en grande en su propia cabecera ($sinSaludo). --}}
+                        @if(!empty($datos['alumno']) && empty($sinSaludo))
                             <p style="margin-top:0;">Hola <strong>{{ $datos['alumno'] }}</strong>,</p>
                         @endif
                         @yield('contenido')

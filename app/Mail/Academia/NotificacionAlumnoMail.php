@@ -88,7 +88,12 @@ class NotificacionAlumnoMail extends Mailable
 
     public function build()
     {
-        if ($this->plantilla) {
+        // Cumpleaños: diseño de celebración con el mensaje de la plantilla adentro.
+        if ($this->tipo === self::CUMPLEANOS) {
+            $correo = $this->from(config('mail.from.address'), $this->academia['nombre'])
+                ->subject($this->plantilla['asunto'] ?? self::ASUNTOS[self::CUMPLEANOS])
+                ->view('emails.academia.cumpleanos', ['cuerpo' => $this->plantilla['html'] ?? null]);
+        } elseif ($this->plantilla) {
             $correo = $this->from(config('mail.from.address'), $this->academia['nombre'])
                 ->subject($this->plantilla['asunto'])
                 ->view('emails.academia.plantilla', ['cuerpo' => $this->plantilla['html']]);
