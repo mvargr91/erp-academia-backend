@@ -93,7 +93,19 @@ class Configuracion
                 return $html ? e($valor) : $valor;
             }, $texto);
         };
-        return ['asunto' => $reemplazo($asunto, false), 'html' => $reemplazo($cuerpo, true)];
+        return ['asunto' => $reemplazo($asunto, false), 'html' => self::imagenesAdaptables($reemplazo($cuerpo, true))];
+    }
+
+    /**
+     * Las imágenes del editor llevan clases CSS que Gmail y Outlook ignoran: se les pone el estilo en
+     * línea para que ocupen como máximo el ancho del correo y no se deformen en el celular.
+     */
+    public static function imagenesAdaptables(string $html): string
+    {
+        return preg_replace_callback('#<img\b([^>]*)>#i', function ($m) {
+            $atributos = preg_replace('#\s(?:style|width|height)="[^"]*"#i', '', $m[1]);
+            return '<img' . $atributos . ' style="display:block; max-width:100%; height:auto; margin:8px auto; border:0;">';
+        }, $html);
     }
 
     /** Conexión a la BD de la academia administradora (se crea al vuelo con los datos de 'mysql'). */
