@@ -12,7 +12,8 @@ use App\Services\Academia\CalendarioCurso;
 
 /**
  * Home del profesor: sus cursos activos con lo necesario para ir a tomar asistencia o ver el
- * calendario. Quien ve todos los cursos (no es un profesor restringido) recibe todos.
+ * calendario, y sus clases personalizadas por registrar. Quien ve todos los cursos (no es un
+ * profesor restringido) recibe todos.
  */
 class MisCursosController extends Controller
 {
@@ -64,6 +65,49 @@ class MisCursosController extends Controller
             fn ($a, $b) => $a['hora'] <=> $b['hora'],
         ])->values();
 
-        return response(['profesor' => $profesorId !== null, 'cursos' => $cursos], Response::HTTP_OK);
+        return response([
+            'profesor' => $profesorId !== null,
+            'cursos' => $cursos,
+            'clases_privadas' => $this->clasesPrivadas($profesorId, $hoy),
+        ], Response::HTTP_OK);
+    }
+
+    /**
+     * Clases personalizadas para registrar asistencia: las programadas de los últimos días (las que el
+     * profesor aún puede registrar) y las de la próxima semana, sin cobro. Primero las de hoy.
+     */
+    private function clasesPrivadas(?int $profesorId, Carbon $hoy): array
+    {
+        $query = DB::table('clases_privadas as c')
+            ->leftJoin('sedes as s', 's.id', '=', 'c.sede_id')
+            ->leftJoin('profesores as p', 'p.id', '=', 'c.profesor_id')
+            ->where('c.estado', 'programada')
+            ->whereBetween('c.fecha', [$hoy->copy()->subDays(Profesor::DIAS_CORRECCION_ASISTENCIA)->toDateString(), $hoy->copy()->addDays(7)->toDateString()])
+            ->when($profesorId, fn ($q) => $q->where('c.profesor_id', $profesorId))
+            ->orderBy('c.fecha')->orderBy('c.hora')
+            ->select('c.id', 'c.fecha', 'c.hora', 'c.duracion_min', 'c.externo_nombre', 's.nombre as sede',
+                DB::raw("CONCAT(p.nombres,' ',p.apellidos) as profesor"));
+        Sede::filtrar($query, 'c.sede_id');
+        $clases = $query->get();
+
+        $alumnos = DB::table('clase_privada_alumno as cpa')
+            ->join('alumnos as a', 'a.id', '=', 'cpa.alumno_id')
+            ->whereIn('cpa.clase_privada_id', $clases->pluck('id'))
+            ->orderBy('a.nombres')
+            ->get(['cpa.clase_privada_id', DB::raw("CONCAT(a.nombres,' ',a.apellidos) as nombre")])
+            ->groupBy('clase_privada_id');
+
+        return $clases->map(fn ($c) => [
+            'id' => $c->id,
+            'fecha' => $c->fecha,
+            'hora' => substr((string) $c->hora, 0, 5),
+            'duracion_min' => (int) $c->duracion_min,
+            'sede' => $c->sede,
+            'profesor' => $c->profesor,
+            'alumnos' => collect($alumnos[$c->id] ?? [])->pluck('nombre')
+                ->concat($c->externo_nombre ? ["{$c->externo_nombre} (no registrado)"] : [])->implode(', '),
+            'hoy' => $c->fecha === $hoy->toDateString(),
+            'pasada' => $c->fecha < $hoy->toDateString(),
+        ])->sortByDesc('hoy')->values()->all();
     }
 }

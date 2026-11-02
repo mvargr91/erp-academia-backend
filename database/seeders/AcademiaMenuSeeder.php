@@ -71,10 +71,11 @@ class AcademiaMenuSeeder extends Seeder
         ]],
     ];
 
-    // Rol listo para los profesores: solo ven sus cursos y toman asistencia. Se crea una vez con estos
-    // permisos; después la academia lo ajusta en Seguridad → Roles como cualquier otro.
+    // Rol listo para los profesores: solo ven sus cursos y toman asistencia, también de sus clases
+    // personalizadas. Se crea una vez con estos permisos; después la academia lo ajusta en Seguridad → Roles.
     private const ROL_PROFESOR = 'Profesor';
-    private const PERMISOS_PROFESOR = ['ListarMisCursos', 'ListarTomaAsistencia', 'CrearTomaAsistencia', 'ModificarTomaAsistencia'];
+    private const PERMISOS_PROFESOR = ['ListarMisCursos', 'ListarTomaAsistencia', 'CrearTomaAsistencia', 'ModificarTomaAsistencia',
+        'RegistrarAsistenciaClasePrivada'];
 
     // Permisos propios de opciones que no siembra este menú (las de Seguridad): url => [entidad, permisos propios].
     private const OTRAS_OPCIONES = [

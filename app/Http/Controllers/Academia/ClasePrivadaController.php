@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\Academia\Pago;
 use App\Models\Academia\Sede;
+use App\Models\Academia\Profesor;
 use App\Services\Academia\Paquetes;
 use App\Services\Academia\ClasesPrivadas;
 use Illuminate\Support\Facades\Validator;
@@ -24,9 +25,38 @@ use App\Services\Academia\CalendarioCurso;
  * Asistencia y cobro son de perfiles distintos: el resultado de la clase se registra con el permiso
  * Modificar de Clases personalizadas; registrar, cambiar o quitar su pago exige el permiso Pagar
  * de la misma opción (PagarClasePrivada).
+ *
+ * Un profesor que solo ve sus cursos (Profesor::soloSusCursos) ve y registra solo sus clases, de hoy o
+ * de los últimos días, y sin el cobro: valor y pago son información de la administración.
  */
 class ClasePrivadaController extends Controller
 {
+    /** Mensaje si el profesor conectado no puede ver o registrar la clase; null si puede. */
+    private function errorDeProfesor(object $clase, bool $registrar = false): ?string
+    {
+        $profesorId = Profesor::soloSusCursos();
+        if ($profesorId === null) {
+            return null;
+        }
+        if ((int) $clase->profesor_id !== $profesorId) {
+            return 'Solo puedes ver y registrar tus clases.';
+        }
+        $dias = Profesor::DIAS_CORRECCION_ASISTENCIA;
+        if ($registrar && Carbon::parse($clase->fecha)->gt(Carbon::today())) {
+            return 'La clase aún no ha llegado: registra la asistencia el día de la clase.';
+        }
+        if ($registrar && Carbon::parse($clase->fecha)->lt(Carbon::today()->subDays($dias))) {
+            return "Solo puedes registrar las clases de los últimos {$dias} días. Para fechas anteriores, pídeselo al administrador.";
+        }
+        return null;
+    }
+
+    /** Quita del registro lo que es de cobro (valor y pago), para el profesor. */
+    private static function sinCobro(array $datos): array
+    {
+        return array_merge($datos, ['valor' => null, 'pago' => null, 'pagada' => false, 'cobro' => null, 'cobro_nombre' => null]);
+    }
+
     private const RESULTADOS = ClasesPrivadas::RESULTADOS;
     private const ESTADOS = ['programada' => 'Programada', 'realizada' => 'Realizada', 'cancelada' => 'Cancelada'];
 
@@ -193,6 +223,10 @@ class ClasePrivadaController extends Controller
     public function index(Request $request)
     {
         $query = Sede::filtrar($this->consulta(), 'c.sede_id');
+        $profesorId = Profesor::soloSusCursos();
+        if ($profesorId !== null) {
+            $request->merge(['profesor_id' => $profesorId]);
+        }
         foreach (['profesor_id' => 'c.profesor_id', 'estado' => 'c.estado'] as $filtro => $columna) {
             if ($request->filled($filtro)) {
                 $query->where($columna, $request->$filtro);
@@ -213,7 +247,10 @@ class ClasePrivadaController extends Controller
         $alumnos = $this->alumnosDe($ids);
         $pagos = $this->pagosDe($ids);
         return response([
-            'datos' => $pagina->getCollection()->map(fn ($c) => $this->formatear($c, $alumnos[$c->id] ?? [], false, $pagos[$c->id] ?? null))->all(),
+            'datos' => $pagina->getCollection()->map(function ($c) use ($alumnos, $pagos, $profesorId) {
+                $datos = $this->formatear($c, $alumnos[$c->id] ?? [], false, $pagos[$c->id] ?? null);
+                return $profesorId !== null ? self::sinCobro($datos) : $datos;
+            })->all(),
             'desde' => $pagina->firstItem(),
             'hasta' => $pagina->lastItem(),
             'por_pagina' => $pagina->perPage(),
@@ -229,10 +266,13 @@ class ClasePrivadaController extends Controller
         if (!$clase) {
             return response(get_response_body(['La clase no existe.']), Response::HTTP_NOT_FOUND);
         }
+        if ($error = $this->errorDeProfesor($clase)) {
+            return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
+        }
         $datos = $this->formatear($clase, $this->alumnosDe([$id])[$id] ?? [], true, $this->pagosDe([$id])[$id] ?? null);
         $datos['alumnos'] = collect($datos['detalle_alumnos'])->pluck('alumno_id');
         $datos['horas_cancelacion'] = ClasesPrivadas::horasCancelacion();
-        return response($datos, Response::HTTP_OK);
+        return response(Profesor::soloSusCursos() !== null ? self::sinCobro($datos) : $datos, Response::HTTP_OK);
     }
 
     private function validar(Request $request)
@@ -360,6 +400,9 @@ class ClasePrivadaController extends Controller
         $clase = DB::table('clases_privadas')->find($id);
         if (!$clase) {
             return response(get_response_body(['La clase no existe.']), Response::HTTP_NOT_FOUND);
+        }
+        if ($error = $this->errorDeProfesor($clase, true)) {
+            return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
         }
         $validator = Validator::make($request->all(), [
             'resultados' => 'nullable|array',

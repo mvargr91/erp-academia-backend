@@ -201,7 +201,8 @@ Route::group(['middleware' => ['auth:api', 'clave.vigente']], function (){
 
     // Clases personalizadas (privadas o de pareja)
     Route::group(["prefix" => "clases-privadas"], function () {
-        Route::get('/', [Academia\ClasePrivadaController::class, 'index'])->name('clases-privadas.index')->middleware('permission:ListarClasePrivada');
+        // El profesor que solo registra asistencia también ve la lista: solo sus clases y sin cobro.
+        Route::get('/', [Academia\ClasePrivadaController::class, 'index'])->name('clases-privadas.index')->middleware('permission:ListarClasePrivada|RegistrarAsistenciaClasePrivada');
         Route::post('/', [Academia\ClasePrivadaController::class, 'store'])->name('clases-privadas.store')->middleware('permission:CrearClasePrivada');
         Route::get('/{id}', [Academia\ClasePrivadaController::class, 'show'])->name('clases-privadas.show')->middleware(Permisos::lectura(['ClasePrivada'], ['PagarClasePrivada', 'RegistrarAsistenciaClasePrivada']));
         Route::put('/{id}', [Academia\ClasePrivadaController::class, 'update'])->name('clases-privadas.update')->middleware('permission:ModificarClasePrivada');
