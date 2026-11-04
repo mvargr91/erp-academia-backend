@@ -186,6 +186,11 @@ class AlumnoController extends Controller
                 );
             }
 
+            if (DB::table('vacacional_inscripciones')->where('alumno_id', $id)->exists()) {
+                DB::rollback();
+                return response(get_response_body(['El alumno tiene inscripciones a vacacionales: márcalo como inactivo en lugar de eliminarlo.']),
+                    Response::HTTP_CONFLICT);
+            }
             $eliminado = Alumno::eliminar($id);
             if ($eliminado) {
                 DB::commit();

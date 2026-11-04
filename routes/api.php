@@ -366,6 +366,9 @@ Route::group(['middleware' => ['auth:api', 'clave.vigente']], function (){
         Route::delete('/{id}', [Academia\VacacionalInscripcionController::class, 'destroy'])->name('vacacionales-inscripciones.delete')->middleware('permission:EliminarVacacionalInscripcion');
     });
 
+    // Valor que propone la tarifa de vacacionales al inscribir (posición en la temporada y pareja)
+    Route::post('vacacionales-matriculas/cotizar', [Academia\VacacionalInscripcionController::class, 'cotizar'])->name('vacacionales-matriculas.cotizar')
+        ->middleware('permission:CrearVacacionalMatricula|CrearVacacionalInscripcion|ModificarVacacionalInscripcion|InscribirVacacionalAlumno');
     // Matrícula rápida de vacacionales: alumno + cursos (con sus clases) + pago en un solo paso
     Route::post('vacacionales-matriculas', [Academia\VacacionalInscripcionController::class, 'matricular'])->name('vacacionales-matriculas.store')->middleware('permission:CrearVacacionalMatricula');
 
