@@ -66,11 +66,12 @@ class EnviosCorreo
                 ]);
         }
 
-        // Público de vacacionales (tabla propia): para anunciar los próximos o escribir a los inscritos de uno.
+        // Público de vacacionales (alumnos con inscripciones a vacacionales): para anunciar los próximos o escribir a los inscritos de uno.
         if (in_array($audiencia, ['vacacionales', 'vacacional_curso'])) {
             $saldos = DB::table('vacacional_inscripciones')->where('estado', 1)->groupBy('alumno_id')
                 ->select('alumno_id', DB::raw('SUM(saldo) as saldo'))->pluck('saldo', 'alumno_id');
-            $query = DB::table('vacacional_alumnos as a')->where('a.estado', 1);
+            $query = DB::table('alumnos as a')->where('a.estado', 1)
+                ->whereIn('a.id', DB::table('vacacional_inscripciones')->select('alumno_id'));
             $curso = '';
             if ($audiencia === 'vacacional_curso') {
                 $cursoId = $filtro['vacacional_curso_id'] ?? 0;
@@ -78,7 +79,7 @@ class EnviosCorreo
                 $query->whereIn('a.id', DB::table('vacacional_inscripciones')->where('curso_id', $cursoId)->where('estado', 1)->select('alumno_id'));
             }
             return $query->orderBy('a.nombres')->get()->map(fn ($a) => [
-                'alumno_id' => null, // no es un alumno de la academia
+                'alumno_id' => $a->id,
                 'nombre' => trim("{$a->nombres} {$a->apellidos}"),
                 'correo' => $a->correo,
                 'variables' => [

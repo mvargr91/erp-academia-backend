@@ -9,6 +9,7 @@ use App\Models\Academia\Sede;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
 use App\Services\Academia\Vacacionales;
+use App\Services\Academia\TarifasVacacionales;
 use Illuminate\Support\Facades\Validator;
 
 /**
@@ -20,10 +21,12 @@ class VacacionalInscripcionController extends Controller
     private function consulta()
     {
         return DB::table('vacacional_inscripciones as i')
-            ->join('vacacional_alumnos as a', 'a.id', '=', 'i.alumno_id')
+            ->join('alumnos as a', 'a.id', '=', 'i.alumno_id')
             ->join('vacacional_cursos as c', 'c.id', '=', 'i.curso_id')
             ->leftJoin('sedes as s', 's.id', '=', 'c.sede_id')
+            ->leftJoin('alumnos as pj', 'pj.id', '=', 'i.pareja_alumno_id')
             ->select('i.*', 'c.nombre as curso_nombre', 'c.clases_por_alumno', 's.nombre as sede_nombre',
+                DB::raw("CONCAT(pj.nombres,' ',pj.apellidos) as pareja_nombre"),
                 'a.correo as alumno_correo', 'a.telefono as alumno_telefono', DB::raw("CONCAT(a.nombres,' ',a.apellidos) as alumno_nombre"));
     }
 
@@ -37,6 +40,8 @@ class VacacionalInscripcionController extends Controller
             'alumno_nombre' => $i->alumno_nombre,
             'alumno_correo' => $i->alumno_correo,
             'alumno_telefono' => $i->alumno_telefono,
+            'pareja_alumno_id' => $i->pareja_alumno_id,
+            'pareja_nombre' => $i->pareja_nombre,
             'curso_id' => $i->curso_id,
             'curso_nombre' => $i->curso_nombre,
             'sede_nombre' => $i->sede_nombre,
@@ -108,10 +113,11 @@ class VacacionalInscripcionController extends Controller
         $datos['alumno_id'] = $actual->alumno_id ?? $request->alumno_id;
         $datos['curso_id'] = $actual->curso_id ?? $request->curso_id;
         $validator = Validator::make($datos, [
-            'alumno_id' => 'required|integer|exists:vacacional_alumnos,id',
+            'alumno_id' => 'required|integer|exists:alumnos,id',
             'curso_id' => 'required|integer|exists:vacacional_cursos,id',
             'fecha_inscripcion' => 'nullable|date',
             'valor' => 'nullable|numeric|min:0',
+            'pareja_alumno_id' => 'nullable|integer|exists:alumnos,id|different:alumno_id',
             'observacion' => 'nullable|string|max:255',
             'estado' => 'nullable|boolean',
             'fechas' => 'nullable|array',
@@ -119,6 +125,7 @@ class VacacionalInscripcionController extends Controller
         ], [
             'alumno_id.required' => 'Elige el alumno.',
             'curso_id.required' => 'Elige el curso vacacional.',
+            'pareja_alumno_id.different' => 'La pareja debe ser otro alumno.',
         ]);
         if ($validator->fails()) {
             return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
@@ -155,7 +162,11 @@ class VacacionalInscripcionController extends Controller
             }
         }
         $pagado = $id ? (float) DB::table('vacacional_pagos')->where('inscripcion_id', $id)->sum('monto') : 0;
-        $valor = $request->filled('valor') ? (float) $request->valor : (float) ($actual->valor ?? $curso->valor);
+        // Pareja: la que llega, o la que ya tenía si la petición no la menciona.
+        $parejaId = $request->exists('pareja_alumno_id') ? ($request->pareja_alumno_id ?: null) : ($actual->pareja_alumno_id ?? null);
+        // Al inscribir, el valor sale de la tarifa de vacacionales (posición en la temporada y pareja).
+        $valor = $request->filled('valor') ? (float) $request->valor : (float) ($actual->valor
+            ?? TarifasVacacionales::calcular($curso, TarifasVacacionales::enTemporada((int) $datos['alumno_id']) + 1, (bool) $parejaId)['valor']);
         if ($valor < $pagado) {
             $errores[] = 'El valor no puede ser menor que lo que ya pagó el alumno.';
         }
@@ -163,9 +174,11 @@ class VacacionalInscripcionController extends Controller
             return response(get_response_body($errores), Response::HTTP_BAD_REQUEST);
         }
 
-        $id = DB::transaction(function () use ($request, $datos, $id, $fechas, $valor, $pagado, $activa) {
+        $parejaAnterior = $actual->pareja_alumno_id ?? null;
+        $id = DB::transaction(function () use ($request, $datos, $id, $actual, $fechas, $valor, $pagado, $activa, $parejaId, $parejaAnterior) {
             $fila = array_merge([
                 'alumno_id' => $datos['alumno_id'],
+                'pareja_alumno_id' => $activa ? $parejaId : null,
                 'curso_id' => $datos['curso_id'],
                 'fecha_inscripcion' => $request->fecha_inscripcion ?: Carbon::today()->toDateString(),
                 'valor' => $valor,
@@ -182,9 +195,63 @@ class VacacionalInscripcionController extends Controller
             foreach ($fechas as $fecha) {
                 DB::table('vacacional_inscripcion_fechas')->insertOrIgnore(['inscripcion_id' => $id, 'fecha' => $fecha]);
             }
+            $this->enlazarPareja((int) $datos['curso_id'], (int) $datos['alumno_id'], $activa ? $parejaId : null, $parejaAnterior);
+            // Si cambió la pareja de una inscripción ya hecha y no se indicó valor, se recalcula con la tarifa.
+            if ($actual && $activa && (int) $parejaAnterior !== (int) $parejaId && !$request->filled('valor')) {
+                $precio = TarifasVacacionales::precioDe($id)['valor'];
+                if ($pagado <= $precio) {
+                    DB::table('vacacional_inscripciones')->where('id', $id)->update(['valor' => $precio]);
+                    Vacacionales::recalcularSaldo($id);
+                }
+            }
             return $id;
         });
         return $this->detalle($id);
+    }
+
+    /**
+     * Deja enlazada la pareja en las dos inscripciones del curso: la nueva pareja pasa a pagar en pareja
+     * con este alumno, y la anterior (si cambió o se quitó) vuelve a pagar individual. Su valor se
+     * recalcula con la tarifa, salvo que ya haya pagado más que el valor nuevo.
+     */
+    private function enlazarPareja(int $cursoId, int $alumnoId, ?int $parejaId, ?int $parejaAnterior): void
+    {
+        $ajustar = function (int $otroId, ?int $nuevaPareja) use ($cursoId) {
+            $otra = DB::table('vacacional_inscripciones')->where('curso_id', $cursoId)->where('alumno_id', $otroId)->where('estado', 1)->first();
+            if (!$otra || (int) $otra->pareja_alumno_id === (int) $nuevaPareja) {
+                return;
+            }
+            DB::table('vacacional_inscripciones')->where('id', $otra->id)->update(['pareja_alumno_id' => $nuevaPareja]);
+            $precio = TarifasVacacionales::precioDe($otra->id)['valor'];
+            if ((float) DB::table('vacacional_pagos')->where('inscripcion_id', $otra->id)->sum('monto') <= $precio) {
+                DB::table('vacacional_inscripciones')->where('id', $otra->id)->update(['valor' => $precio]);
+                Vacacionales::recalcularSaldo($otra->id);
+            }
+        };
+        if ($parejaAnterior && (int) $parejaAnterior !== (int) $parejaId) {
+            $ajustar((int) $parejaAnterior, null);
+        }
+        if ($parejaId) {
+            $ajustar((int) $parejaId, $alumnoId);
+        }
+    }
+
+    /**
+     * POST /v1/vacacionales-matriculas/cotizar { alumno_id?, cursos: [{ curso_id, pareja_alumno_id? }] }
+     * → [{ curso_id, valor, regla, posicion }]: el valor que propone la tarifa al inscribir.
+     */
+    public function cotizar(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'alumno_id' => 'nullable|integer|exists:alumnos,id',
+            'cursos' => 'required|array',
+            'cursos.*.curso_id' => 'required|integer',
+            'cursos.*.pareja_alumno_id' => 'nullable|integer',
+        ]);
+        if ($validator->fails()) {
+            return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+        }
+        return response(TarifasVacacionales::cotizar($request->alumno_id ? (int) $request->alumno_id : null, $request->cursos), Response::HTTP_OK);
     }
 
     public function store(Request $request)
@@ -211,7 +278,7 @@ class VacacionalInscripcionController extends Controller
     public function matricular(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'alumno_id' => 'nullable|integer|exists:vacacional_alumnos,id',
+            'alumno_id' => 'nullable|integer|exists:alumnos,id',
             'alumno' => 'nullable|array|required_without:alumno_id',
             'alumno.nombres' => 'required_without:alumno_id|string|max:100',
             'alumno.apellidos' => 'required_without:alumno_id|string|max:100',
@@ -225,6 +292,7 @@ class VacacionalInscripcionController extends Controller
             'cursos.*.curso_id' => 'required|integer|distinct|exists:vacacional_cursos,id',
             'cursos.*.fechas' => 'nullable|array',
             'cursos.*.valor' => 'nullable|numeric|min:0',
+            'cursos.*.pareja_alumno_id' => 'nullable|integer|exists:alumnos,id',
             'pago' => 'nullable|array',
             'pago.monto' => 'required_with:pago|numeric|gt:0',
             'pago.fecha_pago' => 'required_with:pago|date',
@@ -249,13 +317,20 @@ class VacacionalInscripcionController extends Controller
         try {
             $alumnoId = $request->alumno_id;
             if (!$alumnoId) {
-                $campos = ['nombres', 'apellidos', 'documento', 'fecha_nacimiento', 'telefono', 'correo', 'acudiente_nombre', 'acudiente_telefono'];
-                $alumnoId = DB::table('vacacional_alumnos')->insertGetId(array_merge(
-                    array_fill_keys($campos, null),
-                    array_intersect_key((array) $request->alumno, array_flip($campos)),
-                    ['estado' => true],
-                    Vacacionales::auditoria(true)
-                ));
+                // El alumno nuevo queda en los alumnos de la academia; el acudiente, como contacto de emergencia.
+                $datos = (array) $request->alumno;
+                $alumnoId = DB::table('alumnos')->insertGetId(array_merge([
+                    'sede_id' => Sede::resolver(DB::table('vacacional_cursos')->where('id', $request->cursos[0]['curso_id'] ?? 0)->value('sede_id')),
+                    'nombres' => $datos['nombres'],
+                    'apellidos' => $datos['apellidos'],
+                    'documento' => $datos['documento'] ?? null,
+                    'fecha_nacimiento' => $datos['fecha_nacimiento'] ?? null,
+                    'telefono' => $datos['telefono'] ?? null,
+                    'correo' => $datos['correo'] ?? null,
+                    'contacto_emergencia' => $datos['acudiente_nombre'] ?? null,
+                    'telefono_emergencia' => $datos['acudiente_telefono'] ?? null,
+                    'estado' => true,
+                ], Vacacionales::auditoria(true)));
             }
 
             $inscripciones = [];
@@ -265,6 +340,7 @@ class VacacionalInscripcionController extends Controller
                     'curso_id' => $curso['curso_id'],
                     'fechas' => $curso['fechas'] ?? [],
                     'valor' => $curso['valor'] ?? null,
+                    'pareja_alumno_id' => $curso['pareja_alumno_id'] ?? null,
                 ]), null);
                 if (!is_array($inscripcion)) {
                     // Algún curso no se pudo inscribir: no se guarda nada (ni el alumno nuevo).
@@ -307,7 +383,7 @@ class VacacionalInscripcionController extends Controller
             return response(get_response_body(['No se pudo registrar la matrícula: ' . $e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
         }
 
-        $alumno = DB::table('vacacional_alumnos')->find($alumnoId);
+        $alumno = DB::table('alumnos')->find($alumnoId);
         return response(get_response_body(['La matrícula del vacacional ha sido registrada.', 2], [
             'alumno' => ['id' => $alumno->id, 'nombre' => trim("{$alumno->nombres} {$alumno->apellidos}")],
             'cursos' => array_map(fn ($i) => ['nombre' => $i['curso_nombre'], 'fechas_texto' => $i['fechas_texto'], 'valor' => $i['valor']], $inscripciones),

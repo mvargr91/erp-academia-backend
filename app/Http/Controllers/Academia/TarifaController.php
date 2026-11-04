@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
 use App\Models\Academia\Plan;
 use App\Services\Academia\Tarifas;
+use App\Services\Academia\TarifasVacacionales;
 use Illuminate\Support\Facades\Validator;
 
 /**
@@ -16,6 +17,8 @@ use Illuminate\Support\Facades\Validator;
  *  - Cursos: por cada modalidad, total por ciclo según cuántos cursos, individual y en pareja (única fuente del precio).
  *  - Clases personalizadas: la clase suelta y los paquetes (4, 8… clases) con su precio normal, el
  *    precio para quien ya es alumno de un curso y los días de vigencia.
+ *  - Vacacionales: una escala para todos los cursos vacacionales, individual y en pareja, según
+ *    cuántos toma el alumno en la temporada (TarifasVacacionales).
  */
 class TarifaController extends Controller
 {
@@ -50,7 +53,11 @@ class TarifaController extends Controller
                 'duracion_minutos' => (int) $m->duracion_minutos,
                 'estado' => (bool) $m->estado,
             ] + array_map('array_values', Tarifas::escalas($m->id)));
-        return ['modalidades' => $modalidades, 'personalizadas' => $personalizadas];
+        return [
+            'modalidades' => $modalidades,
+            'personalizadas' => $personalizadas,
+            'vacacionales' => array_map('array_values', TarifasVacacionales::escalas()),
+        ];
     }
 
     /**
@@ -83,6 +90,11 @@ class TarifaController extends Controller
             'personalizadas.*.valor' => 'numeric|required|min:0',
             'personalizadas.*.valor_alumno' => 'numeric|nullable|min:0',
             'personalizadas.*.vigencia_dias' => 'integer|nullable|min:1',
+            'vacacionales' => 'array|nullable',
+            'vacacionales.individual' => 'array|nullable|max:20',
+            'vacacionales.individual.*' => 'numeric|min:0',
+            'vacacionales.pareja' => 'array|nullable|max:20',
+            'vacacionales.pareja.*' => 'numeric|min:0',
         ], [], [
             'modalidades.*.individual.*' => 'total de la escala individual',
             'modalidades.*.pareja.*' => 'total de la escala de pareja',
@@ -98,7 +110,12 @@ class TarifaController extends Controller
 
         // El total no puede bajar al agregar un curso (ese curso saldría con valor negativo).
         $nombres = DB::table('modalidades')->pluck('nombre', 'id');
-        foreach ($datos['modalidades'] ?? [] as $modalidad) {
+        $escalas = $datos['modalidades'] ?? [];
+        if (isset($datos['vacacionales'])) {
+            $nombres['vacacionales'] = 'Vacacionales';
+            $escalas[] = ['id' => 'vacacionales'] + $datos['vacacionales'];
+        }
+        foreach ($escalas as $modalidad) {
             foreach (Tarifas::TIPOS as $tipo) {
                 $totales = array_values($modalidad[$tipo] ?? []);
                 foreach ($totales as $i => $total) {
@@ -119,6 +136,9 @@ class TarifaController extends Controller
                 }
                 if (array_key_exists('personalizadas', $datos)) {
                     $this->guardarPersonalizadas($datos['personalizadas'] ?? []);
+                }
+                if (array_key_exists('vacacionales', $datos)) {
+                    TarifasVacacionales::guardarEscalas($datos['vacacionales'] ?? []);
                 }
             });
             return response(get_response_body(

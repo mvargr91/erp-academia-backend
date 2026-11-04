@@ -16,7 +16,7 @@ class VacacionalPagoController extends Controller
     {
         $query = DB::table('vacacional_pagos as p')
             ->join('vacacional_inscripciones as i', 'i.id', '=', 'p.inscripcion_id')
-            ->join('vacacional_alumnos as a', 'a.id', '=', 'i.alumno_id')
+            ->join('alumnos as a', 'a.id', '=', 'i.alumno_id')
             ->join('vacacional_cursos as c', 'c.id', '=', 'i.curso_id')
             ->leftJoin('sedes as s', 's.id', '=', 'c.sede_id')
             ->select('p.*', 'c.nombre as curso_nombre', 's.nombre as sede_nombre', DB::raw("CONCAT(a.nombres,' ',a.apellidos) as alumno_nombre"));
