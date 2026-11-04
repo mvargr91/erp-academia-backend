@@ -46,12 +46,19 @@ class Curso extends Model
         $nombre = DB::table('sedes')->count() > 1
             ? "CONCAT(ritmos.nombre,' - ',DATE_FORMAT(cursos.hora,'%H:%i'),' · ',COALESCE(sedes.nombre,''))"
             : "CONCAT(ritmos.nombre,' - ',DATE_FORMAT(cursos.hora,'%H:%i'))";
+        // ritmo, dia, hora y profesor_nombre sirven para mostrar cada opción en dos líneas (p. ej. en Pagos).
         $query = DB::table('cursos')
             ->leftJoin('ritmos', 'ritmos.id', '=', 'cursos.ritmo_id')
             ->leftJoin('sedes', 'sedes.id', '=', 'cursos.sede_id')
-            ->select('cursos.id', DB::raw("{$nombre} as nombre"), 'cursos.sede_id')
+            ->leftJoin('profesores', 'profesores.id', '=', 'cursos.profesor_id')
+            ->select('cursos.id', DB::raw("{$nombre} as nombre"), 'cursos.sede_id',
+                DB::raw('COALESCE(cursos.nombre, ritmos.nombre) as ritmo'), 'cursos.dia', DB::raw("DATE_FORMAT(cursos.hora,'%H:%i') as hora"),
+                DB::raw("TRIM(CONCAT(COALESCE(profesores.nombres,''),' ',COALESCE(profesores.apellidos,''))) as profesor_nombre"))
             ->where('cursos.estado', 1)
             ->when($dto['profesor_id'] ?? null, fn ($q, $id) => $q->where('cursos.profesor_id', $id))
+            // Solo los cursos en que el alumno está matriculado (matrícula activa).
+            ->when($dto['alumno_id'] ?? null, fn ($q, $id) => $q->whereExists(fn ($s) => $s->from('curso_alumno')
+                ->whereColumn('curso_alumno.curso_id', 'cursos.id')->where('curso_alumno.alumno_id', $id)->where('curso_alumno.estado', 1)))
             ->orderBy('ritmos.nombre', 'asc');
         return Sede::filtrar($query, 'cursos.sede_id')->get();
     }
