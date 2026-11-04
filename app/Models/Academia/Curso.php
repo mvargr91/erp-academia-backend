@@ -105,6 +105,10 @@ class Curso extends Model
         if (isset($dto['ritmo_id'])) {
             $query->where('cursos.ritmo_id', $dto['ritmo_id']);
         }
+        // 0 = domingo: se compara con '' y no con empty().
+        if (($dto['dia'] ?? '') !== '') {
+            $query->where('cursos.dia', (int) $dto['dia']);
+        }
         if (isset($dto['profesor_id'])) {
             $query->where('cursos.profesor_id', $dto['profesor_id']);
         }
