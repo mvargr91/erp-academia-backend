@@ -93,11 +93,12 @@ class Alumno extends Model
             });
         }
 
+        // Por nombre completo: cada palabra debe estar en nombres + apellidos, en cualquier orden
+        // ("Ana Herrera" encuentra a "Ana María Herrera").
         if (isset($dto['nombre'])) {
-            $query->where(function ($q) use ($dto) {
-                $q->where('nombres', 'like', "%{$dto['nombre']}%")
-                    ->orWhere('apellidos', 'like', "%{$dto['nombre']}%");
-            });
+            foreach (preg_split('/\s+/', trim($dto['nombre']), -1, PREG_SPLIT_NO_EMPTY) as $palabra) {
+                $query->where(DB::raw("CONCAT(COALESCE(nombres,''),' ',COALESCE(apellidos,''))"), 'like', "%{$palabra}%");
+            }
         }
 
         if (isset($dto['ordenar_por']) && count($dto['ordenar_por']) > 0) {

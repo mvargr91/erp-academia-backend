@@ -301,7 +301,7 @@ Route::group(['middleware' => ['auth:api', 'clave.vigente']], function (){
 
     // Cursos
     Route::group(["prefix" => "cursos"], function () {
-        Route::get('/', [Academia\CursoController::class, 'index'])->name('cursos.index')->middleware(Permisos::lectura(['Curso', 'Pago', 'Asistencia', 'TomaAsistencia', 'Matricula', 'EnvioCorreo']));
+        Route::get('/', [Academia\CursoController::class, 'index'])->name('cursos.index')->middleware(Permisos::lectura(['Curso', 'Pago', 'Asistencia', 'TomaAsistencia', 'Matricula', 'EnvioCorreo', 'Cierre']));
         Route::post('/', [Academia\CursoController::class, 'store'])->name('cursos.store')->middleware('permission:CrearCurso');
         Route::get('/{id}/calendario', [Academia\CalendarioController::class, 'curso'])->name('cursos.calendario')->middleware(Permisos::lectura(['Curso', 'MisCursos']));
         Route::post('/{id}/festivos-habilitados', [Academia\CalendarioController::class, 'habilitarFestivo'])->name('cursos.festivos.habilitar')->middleware('permission:ModificarCurso');
