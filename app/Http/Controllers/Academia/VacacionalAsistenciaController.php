@@ -51,7 +51,7 @@ class VacacionalAsistenciaController extends Controller
             $alumnos = $this->clases($cursoId)->where('f.fecha', $request->fecha)
                 ->join('alumnos as a', 'a.id', '=', 'i.alumno_id')
                 ->orderBy('a.nombres')->orderBy('a.apellidos')
-                ->get(['f.inscripcion_id', 'f.asistio', 'i.saldo', 'a.telefono', 'a.acudiente_nombre', 'a.acudiente_telefono',
+                ->get(['f.inscripcion_id', 'f.asistio', 'i.saldo', 'a.telefono', 'a.contacto_emergencia as acudiente_nombre', 'a.telefono_emergencia as acudiente_telefono',
                     DB::raw("CONCAT(a.nombres,' ',a.apellidos) as alumno_nombre")])
                 ->map(fn ($a) => [
                     'inscripcion_id' => $a->inscripcion_id,

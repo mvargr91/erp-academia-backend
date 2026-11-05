@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Validator;
 /**
  * Alumnos de cursos vacacionales: son los mismos alumnos de la academia (una sola ficha por persona).
  * El acudiente se guarda como contacto de emergencia del alumno. La lista muestra a quienes tienen
- * vacacionales o no toman cursos regulares; al buscar por nombre aparecen todos los de la academia.
+ * inscripciones a vacacionales; al buscar por nombre aparecen todos los de la academia.
  */
 class VacacionalAlumnoController extends Controller
 {
@@ -70,10 +70,8 @@ class VacacionalAlumnoController extends Controller
                 $query->where(DB::raw("CONCAT(a.nombres,' ',a.apellidos)"), 'like', "%{$palabra}%");
             }
         } else {
-            // Sin búsqueda: los de vacacionales (con inscripciones o sin cursos regulares).
-            $query->where(fn ($q) => $q
-                ->whereExists(fn ($s) => $s->from('vacacional_inscripciones as i')->whereColumn('i.alumno_id', 'a.id'))
-                ->orWhereNotExists(fn ($s) => $s->from('curso_alumno as ca')->whereColumn('ca.alumno_id', 'a.id')));
+            // Sin búsqueda: los que tienen inscripciones a vacacionales.
+            $query->whereExists(fn ($s) => $s->from('vacacional_inscripciones as i')->whereColumn('i.alumno_id', 'a.id'));
         }
         return response(
             Vacacionales::paginar($query->orderBy('a.nombres')->orderBy('a.apellidos'), $request, fn ($a) => $this->formatear($a)),
