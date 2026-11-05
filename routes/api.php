@@ -380,4 +380,5 @@ Route::group(['middleware' => ['auth:api', 'clave.vigente']], function (){
 
     // Dashboard de academia
     Route::get('academia/dashboard', [Academia\DashboardController::class, 'index'])->name('academia.dashboard')->middleware('permission:ListarDashboardAcademia');
+    Route::get('academia/dashboard/detalle', [Academia\DashboardController::class, 'detalle'])->name('academia.dashboard.detalle')->middleware('permission:ListarDashboardAcademia');
 });
