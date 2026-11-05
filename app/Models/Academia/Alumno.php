@@ -53,6 +53,11 @@ class Alumno extends Model
             ->get();
     }
 
+    // Qué toma el alumno: se deduce de sus matrículas activas y de sus inscripciones a vacacionales.
+    private const SQL_CURSOS = 'EXISTS (SELECT 1 FROM curso_alumno ca WHERE ca.alumno_id = alumnos.id AND ca.estado = 1)';
+    private const SQL_VACACIONALES = 'EXISTS (SELECT 1 FROM vacacional_inscripciones vi WHERE vi.alumno_id = alumnos.id AND vi.estado = 1)';
+    public const TIPOS = ['cursos' => 'Cursos regulares', 'vacacionales' => 'Vacacionales', 'ambos' => 'Ambos', 'sin_cursos' => 'Sin cursos'];
+
     public static function obtenerColeccion($dto)
     {
         $query = DB::table('alumnos')
@@ -61,6 +66,8 @@ class Alumno extends Model
                 'usuario_id',
                 'sede_id',
                 DB::raw('(SELECT nombre FROM sedes WHERE sedes.id = alumnos.sede_id) as sede_nombre'),
+                DB::raw('CASE WHEN ' . self::SQL_CURSOS . ' AND ' . self::SQL_VACACIONALES . " THEN 'ambos' WHEN " . self::SQL_CURSOS
+                    . " THEN 'cursos' WHEN " . self::SQL_VACACIONALES . " THEN 'vacacionales' ELSE 'sin_cursos' END as tipo"),
                 // Lo que debe hoy: saldos de sus cursos y de sus paquetes de clases.
                 DB::raw("(SELECT COALESCE(SUM(curso_alumno.saldo), 0) FROM curso_alumno WHERE curso_alumno.alumno_id = alumnos.id AND curso_alumno.estado = 1 AND curso_alumno.saldo > 0) + (SELECT COALESCE(SUM(paquetes_alumno.saldo), 0) FROM paquetes_alumno WHERE paquetes_alumno.alumno_id = alumnos.id AND paquetes_alumno.estado = 'activo' AND paquetes_alumno.saldo > 0) as saldo_pendiente"),
                 'nombres',
@@ -91,6 +98,18 @@ class Alumno extends Model
                         ->where('curso_alumno.estado', 1)
                         ->where('cursos.sede_id', $sedeId));
             });
+        }
+
+        if (!empty($dto['tipo'])) {
+            $condicion = [
+                'cursos' => self::SQL_CURSOS . ' AND NOT ' . self::SQL_VACACIONALES,
+                'vacacionales' => self::SQL_VACACIONALES . ' AND NOT ' . self::SQL_CURSOS,
+                'ambos' => self::SQL_CURSOS . ' AND ' . self::SQL_VACACIONALES,
+                'sin_cursos' => 'NOT ' . self::SQL_CURSOS . ' AND NOT ' . self::SQL_VACACIONALES,
+            ][$dto['tipo']] ?? null;
+            if ($condicion) {
+                $query->whereRaw($condicion);
+            }
         }
 
         // Por nombre completo: cada palabra debe estar en nombres + apellidos, en cualquier orden
