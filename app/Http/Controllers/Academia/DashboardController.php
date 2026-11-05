@@ -36,6 +36,11 @@ class DashboardController extends Controller
     /** Alumnos activos: de toda la academia, o los de la sede (por sede principal o por matrícula). */
     private function alumnosActivos(?int $sedeId): int
     {
+        return $this->consultaAlumnosActivos($sedeId)->count();
+    }
+
+    private function consultaAlumnosActivos(?int $sedeId)
+    {
         $query = DB::table('alumnos')->where('alumnos.estado', 1);
         if ($sedeId) {
             $query->where(function ($q) use ($sedeId) {
@@ -47,7 +52,7 @@ class DashboardController extends Controller
                         ->where('cursos.sede_id', $sedeId));
             });
         }
-        return $query->count();
+        return $query;
     }
 
     private function profesoresActivos(?int $sedeId): int
@@ -120,6 +125,7 @@ class DashboardController extends Controller
                     ->sum('monto');
                 $punto = [
                     'mes' => $mes->locale('es')->isoFormat('MMM YYYY'),
+                    'clave' => $mes->format('Y-m'),
                     'total' => $delMes($sedeId),
                 ];
                 if ($comparar) {
@@ -154,5 +160,102 @@ class DashboardController extends Controller
         } catch (Exception $e) {
             return response($e->getMessage(), Response::HTTP_INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * Lo que hay detrás de cada número del panel, con los mismos filtros (sede del encabezado):
+     * GET /v1/academia/dashboard/detalle?indicador=…[&mes=YYYY-MM][&ritmo=…]
+     * indicador: alumnos_activos | cursos_activos | ingresos_mes | matriculas_activas | profesores_activos
+     *            | morosos (también saldo_pendiente) | ingresos (con mes) | ritmo (con ritmo)
+     * → { titulo, columnas: [{ id, label, tipo }], filas: [...] }
+     */
+    public function detalle(Request $request)
+    {
+        $sedeId = Sede::actual();
+        $nombre = "CONCAT(alumnos.nombres,' ',alumnos.apellidos)";
+        $curso = "CONCAT(ritmos.nombre,' · ',ELT(cursos.dia + 1,'Dom','Lun','Mar','Mié','Jue','Vie','Sáb'),' ',DATE_FORMAT(cursos.hora,'%H:%i'))";
+        $profesor = "TRIM(CONCAT(COALESCE(profesores.nombres,''),' ',COALESCE(profesores.apellidos,'')))";
+        $col = fn ($id, $label, $tipo = 'texto') => ['id' => $id, 'label' => $label, 'tipo' => $tipo];
+        // Matrículas con alumno, curso y profesor (base de matrículas, morosos y ritmos).
+        $matriculas = fn () => $this->matriculas($sedeId)
+            ->join('alumnos', 'alumnos.id', '=', 'curso_alumno.alumno_id')
+            ->leftJoin('ritmos', 'ritmos.id', '=', 'cursos.ritmo_id')
+            ->leftJoin('profesores', 'profesores.id', '=', 'cursos.profesor_id')
+            ->select(DB::raw("{$nombre} as alumno"), DB::raw("{$curso} as curso"), DB::raw("{$profesor} as profesor"),
+                'curso_alumno.ciclo_inicio', 'curso_alumno.saldo', 'alumnos.telefono', 'alumnos.correo')
+            ->orderBy('alumnos.nombres')->orderBy('alumnos.apellidos');
+        $pagosDe = fn (string $desde, string $hasta) => $this->pagos($sedeId)
+            ->leftJoin('alumnos', 'alumnos.id', '=', 'pagos.alumno_id')
+            ->leftJoin('cursos', 'cursos.id', '=', 'pagos.curso_id')
+            ->leftJoin('ritmos', 'ritmos.id', '=', 'cursos.ritmo_id')
+            ->whereBetween('pagos.fecha_pago', [$desde, $hasta])
+            ->select('pagos.fecha_pago', DB::raw("COALESCE({$nombre}, pagos.pagador_nombre) as alumno"),
+                DB::raw("CASE WHEN pagos.curso_id IS NOT NULL THEN {$curso} WHEN pagos.paquete_id IS NOT NULL THEN 'Paquete de clases'"
+                    . " WHEN pagos.clase_privada_id IS NOT NULL THEN 'Clase personalizada' ELSE '' END as concepto"),
+                'pagos.metodo_pago', 'pagos.referencia', 'pagos.monto')
+            ->orderBy('pagos.fecha_pago', 'desc')->orderBy('pagos.id', 'desc');
+        $mesActual = [Carbon::now()->startOfMonth()->toDateString(), Carbon::now()->endOfMonth()->toDateString()];
+
+        switch ($request->indicador) {
+            case 'alumnos_activos':
+                $titulo = 'Alumnos activos';
+                $columnas = [$col('alumno', 'Alumno'), $col('telefono', 'Teléfono'), $col('correo', 'Correo'), $col('cursos', 'Cursos activos', 'numero')];
+                $filas = $this->consultaAlumnosActivos($sedeId)
+                    ->select(DB::raw("{$nombre} as alumno"), 'alumnos.telefono', 'alumnos.correo',
+                        DB::raw('(SELECT COUNT(*) FROM curso_alumno ca WHERE ca.alumno_id = alumnos.id AND ca.estado = 1) as cursos'))
+                    ->orderBy('alumnos.nombres')->orderBy('alumnos.apellidos')->get();
+                break;
+            case 'cursos_activos':
+                $titulo = 'Cursos activos';
+                $columnas = [$col('curso', 'Curso'), $col('profesor', 'Profesor'), $col('sede', 'Sede'), $col('matriculados', 'Matriculados', 'numero')];
+                $filas = $this->cursosActivos($sedeId)
+                    ->leftJoin('ritmos', 'ritmos.id', '=', 'cursos.ritmo_id')
+                    ->leftJoin('profesores', 'profesores.id', '=', 'cursos.profesor_id')
+                    ->leftJoin('sedes', 'sedes.id', '=', 'cursos.sede_id')
+                    ->select(DB::raw("{$curso} as curso"), DB::raw("{$profesor} as profesor"), 'sedes.nombre as sede',
+                        DB::raw('(SELECT COUNT(*) FROM curso_alumno ca WHERE ca.curso_id = cursos.id AND ca.estado = 1) as matriculados'))
+                    ->orderBy('cursos.dia')->orderBy('cursos.hora')->get();
+                break;
+            case 'profesores_activos':
+                $titulo = 'Profesores activos';
+                $columnas = [$col('profesor', 'Profesor'), $col('telefono', 'Teléfono'), $col('correo', 'Correo'), $col('cursos', 'Cursos activos', 'numero')];
+                $query = DB::table('profesores')->where('profesores.estado', 1)
+                    ->select(DB::raw("{$profesor} as profesor"), 'profesores.telefono', 'profesores.correo',
+                        DB::raw('(SELECT COUNT(*) FROM cursos c WHERE c.profesor_id = profesores.id AND c.activo = 1 AND c.estado = 1'
+                            . ($sedeId ? ' AND c.sede_id = ' . (int) $sedeId : '') . ') as cursos'))
+                    ->orderBy('profesores.nombres');
+                if ($sedeId) {
+                    $query->whereIn('profesores.id', $this->cursosActivos($sedeId)->whereNotNull('cursos.profesor_id')->select('cursos.profesor_id'));
+                }
+                $filas = $query->get();
+                break;
+            case 'matriculas_activas':
+                $titulo = 'Matrículas activas';
+                $columnas = [$col('alumno', 'Alumno'), $col('curso', 'Curso'), $col('profesor', 'Profesor'), $col('ciclo_inicio', 'Ciclo desde', 'fecha'), $col('saldo', 'Debe', 'dinero')];
+                $filas = $matriculas()->get();
+                break;
+            case 'morosos':
+            case 'saldo_pendiente':
+                $titulo = 'Alumnos morosos (saldo pendiente)';
+                $columnas = [$col('alumno', 'Alumno'), $col('curso', 'Curso'), $col('telefono', 'Teléfono'), $col('correo', 'Correo'), $col('saldo', 'Debe', 'dinero')];
+                $filas = $matriculas()->where('curso_alumno.saldo', '>', 0)->reorder('curso_alumno.saldo', 'desc')->get();
+                break;
+            case 'ingresos_mes':
+            case 'ingresos':
+                $mes = $request->filled('mes') ? Carbon::createFromFormat('Y-m', $request->mes)->startOfMonth() : Carbon::now()->startOfMonth();
+                [$desde, $hasta] = $request->filled('mes') ? [$mes->toDateString(), $mes->copy()->endOfMonth()->toDateString()] : $mesActual;
+                $titulo = 'Ingresos de ' . $mes->locale('es')->isoFormat('MMMM YYYY');
+                $columnas = [$col('fecha_pago', 'Fecha', 'fecha'), $col('alumno', 'Alumno'), $col('concepto', 'Concepto'), $col('metodo_pago', 'Método'), $col('referencia', 'Referencia'), $col('monto', 'Monto', 'dinero')];
+                $filas = $pagosDe($desde, $hasta)->get();
+                break;
+            case 'ritmo':
+                $titulo = 'Matrículas de ' . $request->ritmo;
+                $columnas = [$col('alumno', 'Alumno'), $col('curso', 'Curso'), $col('profesor', 'Profesor'), $col('saldo', 'Debe', 'dinero')];
+                $filas = $matriculas()->where('ritmos.nombre', $request->ritmo)->get();
+                break;
+            default:
+                return response(get_response_body(['Indicador no válido.']), Response::HTTP_BAD_REQUEST);
+        }
+        return response(['titulo' => $titulo, 'columnas' => $columnas, 'filas' => $filas], Response::HTTP_OK);
     }
 }
