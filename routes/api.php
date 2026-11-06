@@ -349,6 +349,8 @@ Route::group(['middleware' => ['auth:api', 'clave.vigente']], function (){
 
     Route::group(["prefix" => "vacacionales-cursos"], function () {
         Route::get('/', [Academia\VacacionalCursoController::class, 'index'])->name('vacacionales-cursos.index')->middleware(Permisos::lectura(['VacacionalCurso', 'VacacionalInscripcion', 'VacacionalMatricula', 'VacacionalAsistencia', 'VacacionalPago', 'EnvioCorreo'], ['InscribirVacacionalAlumno']));
+        // Tarifa de vacacionales que aplica a los cursos (el formulario del curso la muestra en lugar del precio).
+        Route::get('/tarifa', [Academia\VacacionalCursoController::class, 'tarifa'])->name('vacacionales-cursos.tarifa')->middleware(Permisos::lectura(['VacacionalCurso']));
         Route::post('/', [Academia\VacacionalCursoController::class, 'store'])->name('vacacionales-cursos.store')->middleware('permission:CrearVacacionalCurso');
         Route::get('/{id}', [Academia\VacacionalCursoController::class, 'show'])->name('vacacionales-cursos.show')->middleware(Permisos::lectura(['VacacionalCurso', 'VacacionalInscripcion', 'EnvioCorreo'], ['VerInscritosVacacionalCurso']));
         Route::put('/{id}', [Academia\VacacionalCursoController::class, 'update'])->name('vacacionales-cursos.update')->middleware('permission:ModificarVacacionalCurso');

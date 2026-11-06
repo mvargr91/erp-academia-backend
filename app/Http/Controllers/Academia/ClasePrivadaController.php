@@ -289,6 +289,7 @@ class ClasePrivadaController extends Controller
             'externo_nombre' => 'nullable|string|max:150',
             'externo_telefono' => 'nullable|string|max:30',
             'observacion' => 'nullable|string',
+            'tomada_ahora' => 'nullable|boolean',
         ], self::MENSAJES_COBRO + [
             'alumnos.required_without' => 'Elige al menos un alumno o escribe el nombre de la persona que toma la clase.',
             'sede_id.required' => 'Elige la sede de la clase.',
@@ -357,6 +358,10 @@ class ClasePrivadaController extends Controller
         return " Atención: {$nombres} no tiene(n) clases disponibles en un paquete vigente.";
     }
 
+    /**
+     * Agenda una clase. Con `tomada_ahora` (clase que se toma en el momento, p. ej. una clase suelta)
+     * queda además con la asistencia registrada: todos asistieron y se descuenta del paquete.
+     */
     public function store(Request $request)
     {
         if ($errores = $this->validar($request)) {
@@ -365,9 +370,25 @@ class ClasePrivadaController extends Controller
         if ($error = $this->permisoDePagoFaltante($request, null)) {
             return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
         }
+        $ahora = $request->boolean('tomada_ahora');
+        if ($ahora && Carbon::parse($request->fecha)->gt(Carbon::today())) {
+            return response(get_response_body(['Una clase que se toma ahora no puede tener fecha futura.']), Response::HTTP_BAD_REQUEST);
+        }
+        if ($ahora && !Auth::user()->checkPermissionTo('RegistrarAsistenciaClasePrivada', 'api')) {
+            return response(get_response_body(['No tienes permiso para registrar la asistencia de la clase.']), Response::HTTP_FORBIDDEN);
+        }
         $id = DB::transaction(fn () => $this->guardar($request));
-        return response(get_response_body(['La clase ha sido agendada.' . $this->avisoSinPaquete($request->alumnos ?? []), 2],
-            ['id' => $id]), Response::HTTP_CREATED);
+        if (!$ahora) {
+            return response(get_response_body(['La clase ha sido agendada.' . $this->avisoSinPaquete($request->alumnos ?? []), 2],
+                ['id' => $id]), Response::HTTP_CREATED);
+        }
+        $registro = $this->registrar(new Request([
+            'resultados' => array_map(fn ($a) => ['alumno_id' => (int) $a, 'resultado' => 'asistio'], $request->alumnos ?? []),
+            'externo_resultado' => $request->externo_nombre ? 'asistio' : null,
+        ]), $id);
+        $aviso = $registro->getOriginalContent()['mensajes'][0] ?? '';
+        $aviso = trim(str_replace('Resultado registrado.', '', $aviso));
+        return response(get_response_body([trim('La clase quedó registrada como tomada. ' . $aviso), 2], ['id' => $id]), Response::HTTP_CREATED);
     }
 
     public function update(Request $request, $id)

@@ -8,12 +8,16 @@ use Illuminate\Http\Response;
 use App\Models\Academia\Sede;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
+use App\Services\Academia\Tarifas;
 use App\Services\Academia\Vacacionales;
+use App\Services\Academia\TarifasVacacionales;
 use Illuminate\Support\Facades\Validator;
 
 /**
  * Cursos vacacionales: género (ritmo), profesor y las fechas de clase elegidas una a una en el
  * calendario (pueden ser días discontinuos). Cada alumno toma `clases_por_alumno` de esas fechas.
+ * El precio sale de la tarifa de vacacionales (Configuración → Tarifas); el valor propio del curso
+ * solo se usa mientras la academia no tiene esa tarifa.
  */
 class VacacionalCursoController extends Controller
 {
@@ -35,6 +39,39 @@ class VacacionalCursoController extends Controller
             ->selectSub(DB::table('vacacional_curso_fechas as f')->whereColumn('f.curso_id', 'c.id')->selectRaw('MAX(f.fecha)'), 'fecha_fin');
     }
 
+    /** ¿La academia tiene tarifa de vacacionales? Entonces el curso no lleva precio propio. */
+    private static function usaTarifa(): bool
+    {
+        static $usa = [];
+        $bd = DB::connection()->getDatabaseName();
+        return $usa[$bd] ??= (bool) TarifasVacacionales::escalas()[Tarifas::INDIVIDUAL];
+    }
+
+    /** GET /v1/vacacionales-cursos/tarifa → { usa_tarifa, individual: [totales], pareja: [totales] } */
+    public function tarifa()
+    {
+        return response(['usa_tarifa' => self::usaTarifa()] + array_map('array_values', TarifasVacacionales::escalas()), Response::HTTP_OK);
+    }
+
+    /**
+     * Precio para mostrar (p. ej. en el anuncio por correo): con tarifa, la escala de vacacionales
+     * ("1 curso $100.000 · 2 cursos $180.000 · En pareja: $180.000 los dos"); sin ella, el valor del curso.
+     */
+    private static function precioTexto(float $valor): string
+    {
+        $dinero = fn ($v) => '$' . number_format((float) $v, 0, ',', '.');
+        if (!self::usaTarifa()) {
+            return $dinero($valor);
+        }
+        $escalas = TarifasVacacionales::escalas();
+        $texto = collect($escalas[Tarifas::INDIVIDUAL])->map(fn ($t, $n) => $n . ' curso' . ($n > 1 ? 's ' : ' ') . $dinero($t))->implode(' · ');
+        if ($escalas[Tarifas::PAREJA]) {
+            $texto .= ' · En pareja: ' . collect($escalas[Tarifas::PAREJA])
+                ->map(fn ($t, $n) => ($n > 1 ? $n . ' cursos ' : '') . $dinero($t) . ' los dos')->implode(', ');
+        }
+        return $texto;
+    }
+
     private function formatear(object $c): array
     {
         $fechas = Vacacionales::fechasCurso($c->id);
@@ -53,6 +90,8 @@ class VacacionalCursoController extends Controller
             'hora_fin' => $c->hora_fin ? substr((string) $c->hora_fin, 0, 5) : null,
             'clases_por_alumno' => (int) $c->clases_por_alumno,
             'valor' => (float) $c->valor,
+            'usa_tarifa' => self::usaTarifa(),
+            'precio_texto' => self::precioTexto((float) $c->valor),
             'cupo_max' => $c->cupo_max,
             'descripcion' => $c->descripcion,
             'estado' => $c->estado,
@@ -117,7 +156,8 @@ class VacacionalCursoController extends Controller
             'hora_inicio' => 'nullable|date_format:H:i',
             'hora_fin' => 'nullable|date_format:H:i|after:hora_inicio',
             'clases_por_alumno' => 'required|integer|min:1|max:60',
-            'valor' => 'required|numeric|min:0',
+            // Con tarifa de vacacionales el curso no lleva precio propio.
+            'valor' => (self::usaTarifa() ? 'nullable' : 'required') . '|numeric|min:0',
             'cupo_max' => 'nullable|integer|min:1',
             'descripcion' => 'nullable|string|max:500',
             'estado' => 'required|boolean',
@@ -126,6 +166,7 @@ class VacacionalCursoController extends Controller
         ], [
             'sede_id.required' => 'Elige la sede del curso.',
             'fechas.required' => 'Elige en el calendario los días de clase.',
+            'valor.required' => 'Indica el valor del curso, o define la tarifa de vacacionales en Configuración → Tarifas.',
             'hora_fin.after' => 'La hora de fin debe ser posterior a la de inicio.',
         ]);
         $validator->after(function ($v) use ($request, $id) {
@@ -155,7 +196,7 @@ class VacacionalCursoController extends Controller
             $fila = array_merge(
                 array_fill_keys(self::CAMPOS, null),
                 $request->only(self::CAMPOS),
-                ['sede_id' => $datos['sede_id']],
+                ['sede_id' => $datos['sede_id'], 'valor' => $request->filled('valor') ? $request->valor : 0],
                 Vacacionales::auditoria(!$id)
             );
             if ($id) {

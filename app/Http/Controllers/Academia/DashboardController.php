@@ -27,6 +27,24 @@ class DashboardController extends Controller
         return $sedeId ? $query->where('pagos.sede_id', $sedeId) : $query;
     }
 
+    /** Pagos de vacacionales (tabla propia); la sede es la del curso vacacional. */
+    private function pagosVacacionales(?int $sedeId)
+    {
+        $query = DB::table('vacacional_pagos')
+            ->join('vacacional_inscripciones', 'vacacional_inscripciones.id', '=', 'vacacional_pagos.inscripcion_id')
+            ->join('vacacional_cursos', 'vacacional_cursos.id', '=', 'vacacional_inscripciones.curso_id');
+        return $sedeId ? $query->where('vacacional_cursos.sede_id', $sedeId) : $query;
+    }
+
+    /** Ingresos entre dos fechas: los de la academia más los de vacacionales (que también se dan aparte). */
+    private function ingresos(?int $sedeId, string $desde, string $hasta): array
+    {
+        $vacacionales = (float) $this->pagosVacacionales($sedeId)->whereBetween('vacacional_pagos.fecha_pago', [$desde, $hasta])
+            ->sum('vacacional_pagos.monto');
+        $academia = (float) $this->pagos($sedeId)->whereBetween('fecha_pago', [$desde, $hasta])->sum('monto');
+        return ['total' => $academia + $vacacionales, 'vacacionales' => $vacacionales];
+    }
+
     private function cursosActivos(?int $sedeId)
     {
         $query = DB::table('cursos')->where('cursos.activo', 1)->where('cursos.estado', 1);
@@ -70,7 +88,8 @@ class DashboardController extends Controller
             'alumnos_activos' => $this->alumnosActivos($sedeId),
             'profesores_activos' => $this->profesoresActivos($sedeId),
             'cursos_activos' => $this->cursosActivos($sedeId)->count(),
-            'ingresos_mes' => (float) $this->pagos($sedeId)->whereBetween('fecha_pago', [$inicioMes, $finMes])->sum('monto'),
+            'ingresos_mes' => $this->ingresos($sedeId, $inicioMes, $finMes)['total'],
+            'ingresos_vacacionales_mes' => $this->ingresos($sedeId, $inicioMes, $finMes)['vacacionales'],
             'matriculas_activas' => $this->matriculas($sedeId)->count(),
             // Alumnos con saldo pendiente (morosos).
             'morosos' => $this->matriculas($sedeId)->where('curso_alumno.saldo', '>', 0)->count(),
@@ -119,17 +138,15 @@ class DashboardController extends Controller
             $ingresosPorMes = [];
             for ($i = 5; $i >= 0; $i--) {
                 $mes = Carbon::now()->startOfMonth()->subMonths($i);
-                $delMes = fn (?int $sede) => (float) $this->pagos($sede)
-                    ->whereYear('fecha_pago', $mes->year)
-                    ->whereMonth('fecha_pago', $mes->month)
-                    ->sum('monto');
+                $delMes = fn (?int $sede) => $this->ingresos($sede, $mes->toDateString(), $mes->copy()->endOfMonth()->toDateString());
                 $punto = [
                     'mes' => $mes->locale('es')->isoFormat('MMM YYYY'),
                     'clave' => $mes->format('Y-m'),
-                    'total' => $delMes($sedeId),
+                    'total' => $delMes($sedeId)['total'],
+                    'vacacionales' => $delMes($sedeId)['vacacionales'],
                 ];
                 if ($comparar) {
-                    $punto['sedes'] = $sedes->mapWithKeys(fn ($s) => [$s->nombre => $delMes($s->id)])->all();
+                    $punto['sedes'] = $sedes->mapWithKeys(fn ($s) => [$s->nombre => $delMes($s->id)['total']])->all();
                 }
                 $ingresosPorMes[] = $punto;
             }
@@ -188,10 +205,11 @@ class DashboardController extends Controller
             ->leftJoin('alumnos', 'alumnos.id', '=', 'pagos.alumno_id')
             ->leftJoin('cursos', 'cursos.id', '=', 'pagos.curso_id')
             ->leftJoin('ritmos', 'ritmos.id', '=', 'cursos.ritmo_id')
+            ->leftJoin('clases_privadas as cp', 'cp.id', '=', 'pagos.clase_privada_id')
             ->whereBetween('pagos.fecha_pago', [$desde, $hasta])
             ->select('pagos.fecha_pago', DB::raw("COALESCE({$nombre}, pagos.pagador_nombre) as alumno"),
                 DB::raw("CASE WHEN pagos.curso_id IS NOT NULL THEN {$curso} WHEN pagos.paquete_id IS NOT NULL THEN 'Paquete de clases'"
-                    . " WHEN pagos.clase_privada_id IS NOT NULL THEN 'Clase personalizada' ELSE '' END as concepto"),
+                    . " WHEN pagos.clase_privada_id IS NOT NULL THEN IF(cp.externo_nombre IS NOT NULL, 'Clase suelta', 'Clase personalizada') ELSE '' END as concepto"),
                 'pagos.metodo_pago', 'pagos.referencia', 'pagos.monto')
             ->orderBy('pagos.fecha_pago', 'desc')->orderBy('pagos.id', 'desc');
         $mesActual = [Carbon::now()->startOfMonth()->toDateString(), Carbon::now()->endOfMonth()->toDateString()];
@@ -246,7 +264,14 @@ class DashboardController extends Controller
                 [$desde, $hasta] = $request->filled('mes') ? [$mes->toDateString(), $mes->copy()->endOfMonth()->toDateString()] : $mesActual;
                 $titulo = 'Ingresos de ' . $mes->locale('es')->isoFormat('MMMM YYYY');
                 $columnas = [$col('fecha_pago', 'Fecha', 'fecha'), $col('alumno', 'Alumno'), $col('concepto', 'Concepto'), $col('metodo_pago', 'Método'), $col('referencia', 'Referencia'), $col('monto', 'Monto', 'dinero')];
-                $filas = $pagosDe($desde, $hasta)->get();
+                // Con los de vacacionales, que se ven aparte en su concepto.
+                $vacacionales = $this->pagosVacacionales($sedeId)
+                    ->join('alumnos', 'alumnos.id', '=', 'vacacional_inscripciones.alumno_id')
+                    ->whereBetween('vacacional_pagos.fecha_pago', [$desde, $hasta])
+                    ->get(['vacacional_pagos.fecha_pago', DB::raw("{$nombre} as alumno"),
+                        DB::raw("CONCAT('Vacacional · ', vacacional_cursos.nombre) as concepto"), 'vacacional_pagos.metodo_pago',
+                        'vacacional_pagos.referencia', 'vacacional_pagos.monto']);
+                $filas = $pagosDe($desde, $hasta)->get()->concat($vacacionales)->sortByDesc('fecha_pago')->values();
                 break;
             case 'ritmo':
                 $titulo = 'Matrículas de ' . $request->ritmo;
