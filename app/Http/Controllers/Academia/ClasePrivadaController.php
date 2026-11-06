@@ -359,8 +359,8 @@ class ClasePrivadaController extends Controller
     }
 
     /**
-     * Agenda una clase. Con `tomada_ahora` (clase que se toma en el momento, p. ej. una clase suelta)
-     * queda además con la asistencia registrada: todos asistieron y se descuenta del paquete.
+     * Agenda una clase. Con `tomada_ahora` (solo clase suelta: una persona no registrada que toma la
+     * clase en el momento) queda además realizada y con su asistencia registrada.
      */
     public function store(Request $request)
     {
@@ -371,6 +371,10 @@ class ClasePrivadaController extends Controller
             return response(get_response_body([$error]), Response::HTTP_FORBIDDEN);
         }
         $ahora = $request->boolean('tomada_ahora');
+        if ($ahora && (!empty($request->alumnos) || !trim((string) $request->externo_nombre))) {
+            return response(get_response_body(['«Se toma ahora» es solo para una clase suelta: escribe el nombre de la persona y no elijas alumnos.']),
+                Response::HTTP_BAD_REQUEST);
+        }
         if ($ahora && Carbon::parse($request->fecha)->gt(Carbon::today())) {
             return response(get_response_body(['Una clase que se toma ahora no puede tener fecha futura.']), Response::HTTP_BAD_REQUEST);
         }
@@ -382,13 +386,8 @@ class ClasePrivadaController extends Controller
             return response(get_response_body(['La clase ha sido agendada.' . $this->avisoSinPaquete($request->alumnos ?? []), 2],
                 ['id' => $id]), Response::HTTP_CREATED);
         }
-        $registro = $this->registrar(new Request([
-            'resultados' => array_map(fn ($a) => ['alumno_id' => (int) $a, 'resultado' => 'asistio'], $request->alumnos ?? []),
-            'externo_resultado' => $request->externo_nombre ? 'asistio' : null,
-        ]), $id);
-        $aviso = $registro->getOriginalContent()['mensajes'][0] ?? '';
-        $aviso = trim(str_replace('Resultado registrado.', '', $aviso));
-        return response(get_response_body([trim('La clase quedó registrada como tomada. ' . $aviso), 2], ['id' => $id]), Response::HTTP_CREATED);
+        $this->registrar(new Request(['externo_resultado' => 'asistio']), $id);
+        return response(get_response_body(['La clase suelta quedó registrada como tomada.', 2], ['id' => $id]), Response::HTTP_CREATED);
     }
 
     public function update(Request $request, $id)
