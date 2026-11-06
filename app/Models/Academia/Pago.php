@@ -37,6 +37,10 @@ class Pago extends Model
         'usuario_modificacion_nombre',
     ];
 
+    /** Tipo de pago según a qué se abona: curso, paquete de clases o clase personalizada. */
+    public const CONCEPTOS = ['curso' => 'pagos.curso_id IS NOT NULL', 'paquete' => 'pagos.paquete_id IS NOT NULL',
+        'clase' => 'pagos.clase_privada_id IS NOT NULL'];
+
     public static function obtenerColeccion($dto)
     {
         // leftJoin: el pago de una clase suelta no tiene alumno (lo tomó una persona no registrada).
@@ -46,6 +50,9 @@ class Pago extends Model
             ->leftJoin('ritmos', 'ritmos.id', '=', 'cursos.ritmo_id')
             ->leftJoin('planes', 'planes.id', '=', 'pagos.plan_id')
             ->leftJoin('sedes', 'sedes.id', '=', 'pagos.sede_id')
+            ->leftJoin('paquetes_alumno as pa', 'pa.id', '=', 'pagos.paquete_id')
+            ->leftJoin('planes as plan_paquete', 'plan_paquete.id', '=', 'pa.plan_id')
+            ->leftJoin('clases_privadas as cp', 'cp.id', '=', 'pagos.clase_privada_id')
             ->select(
                 'pagos.id',
                 'pagos.sede_id',
@@ -55,6 +62,13 @@ class Pago extends Model
                 'pagos.curso_id',
                 'pagos.clase_privada_id',
                 DB::raw("COALESCE(ritmos.nombre, IF(pagos.clase_privada_id IS NULL, NULL, 'Clase personalizada')) as curso_nombre"),
+                DB::raw("CASE WHEN pagos.curso_id IS NOT NULL THEN CONCAT(COALESCE(ritmos.nombre, 'Curso'), ' · ',"
+                    . " ELT(cursos.dia + 1,'Dom','Lun','Mar','Mié','Jue','Vie','Sáb'), ' ', DATE_FORMAT(cursos.hora,'%H:%i'))"
+                    . " WHEN pagos.paquete_id IS NOT NULL THEN CONCAT('Paquete: ', COALESCE(plan_paquete.nombre, CONCAT(pa.clases_total, ' clases')))"
+                    . " WHEN pagos.clase_privada_id IS NOT NULL THEN IF(cp.externo_nombre IS NOT NULL, 'Clase suelta', 'Clase personalizada')"
+                    . " ELSE 'Otro' END as concepto"),
+                DB::raw("CASE WHEN pagos.curso_id IS NOT NULL THEN 'curso' WHEN pagos.paquete_id IS NOT NULL THEN 'paquete'"
+                    . " WHEN pagos.clase_privada_id IS NOT NULL THEN 'clase' ELSE 'otro' END as tipo_concepto"),
                 'pagos.plan_id',
                 'planes.nombre as plan_nombre',
                 'pagos.monto',
@@ -84,6 +98,9 @@ class Pago extends Model
         }
         if (isset($dto['curso_id'])) {
             $query->where('pagos.curso_id', $dto['curso_id']);
+        }
+        if (isset(self::CONCEPTOS[$dto['concepto'] ?? ''])) {
+            $query->whereRaw(self::CONCEPTOS[$dto['concepto']]);
         }
         if (isset($dto['fecha_desde'])) {
             $query->where('pagos.fecha_pago', '>=', $dto['fecha_desde']);
