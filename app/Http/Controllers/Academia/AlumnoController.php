@@ -10,6 +10,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Academia\Sede;
 use App\Support\CorreoUnico;
 use App\Models\Academia\Alumno;
+use App\Services\Academia\ExportacionAlumnos;
+use App\Support\Academias\GestorAcademias;
 use Illuminate\Support\Facades\Validator;
 
 class AlumnoController extends Controller
@@ -88,6 +90,22 @@ class AlumnoController extends Controller
             }
         } catch (Exception $e) {
             DB::rollback();
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /** Excel de validación: alumnos por curso con lo que debe cada uno. GET /v1/alumnos/exportar-por-curso */
+    public function exportarPorCurso()
+    {
+        try {
+            $academia = GestorAcademias::actual();
+            $codigo = $academia->codigo ?? 'academia';
+            $archivo = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'alumnos-' . uniqid('', true) . '.xlsx';
+            (new ExportacionAlumnos())->generar($archivo, 'Alumnos ' . ($academia->nombre ?? ''));
+            return response()->download($archivo, "alumnos-por-curso-{$codigo}-" . date('Y-m-d') . '.xlsx', [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ])->deleteFileAfterSend();
+        } catch (Exception $e) {
             return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
