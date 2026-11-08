@@ -33,7 +33,7 @@ class AcademiaMenuSeeder extends Seeder
         'Academia' => ['school', 5, [
             // Home del profesor; primera del menú para que sea a donde entra quien solo tiene esto y Tomar asistencia.
             ['Mis cursos', '/mis-cursos', 'co_present', 'MisCursos'],
-            ['Alumnos', '/alumnos', 'groups', 'Alumno', ['EstadoCuenta' => 'Listar', 'Exportar' => 'Listar']],
+            ['Alumnos', '/alumnos', 'groups', 'Alumno', ['EstadoCuenta' => 'Listar', 'Exportar' => 'Listar', 'ImportarCorrecciones']],
             ['Matrícula rápida', '/matriculas', 'how_to_reg', 'Matricula'],
             ['Profesores', '/profesores', 'person', 'Profesor', ['Exportar' => 'Listar']],
             ['Cursos', '/cursos', 'event', 'Curso', ['FormaDePago' => 'Modificar', 'ValorEspecial', 'Exportar' => 'Listar']],
