@@ -47,6 +47,8 @@ class AcademiaMenuSeeder extends Seeder
             ['Asistencia', '/asistencias', 'fact_check', 'Asistencia', ['Exportar' => 'Listar']],
             ['Pagos', '/pagos', 'payments', 'Pago', ['Condonar', 'Exportar' => 'Listar']],
             ['Panel Academia', '/dashboard-academia', 'dashboard', 'DashboardAcademia'],
+            // Excel de validación de alumnos por curso y carga de sus correcciones (mismo que los botones de Alumnos).
+            ['Alumnos por curso', '/alumnos-por-curso', 'table_view', 'AlumnoPorCurso', ['Importar']],
         ]],
         // Público aparte: nada de esto se mezcla con alumnos, cursos ni pagos de la academia.
         'Vacacionales' => ['beach_access', 6, [
