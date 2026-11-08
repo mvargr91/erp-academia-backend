@@ -287,6 +287,8 @@ Route::group(['middleware' => ['auth:api', 'clave.vigente']], function (){
     Route::group(["prefix" => "alumnos"], function () {
         Route::get('/', [Academia\AlumnoController::class, 'index'])->name('alumnos.index')->middleware(Permisos::lectura(['Alumno', 'Curso', 'Pago', 'Paquete', 'ClasePrivada', 'Matricula', 'EnvioCorreo']));
         Route::post('/', [Academia\AlumnoController::class, 'store'])->name('alumnos.store')->middleware('permission:CrearAlumno');
+        Route::get('/exportar-por-curso', [Academia\AlumnoController::class, 'exportarPorCurso'])->name('alumnos.exportar-por-curso')->middleware('permission:ExportarAlumno|ListarAlumnoPorCurso');
+        Route::post('/importar-correcciones', [Academia\AlumnoController::class, 'importarCorrecciones'])->name('alumnos.importar-correcciones')->middleware('permission:ImportarCorreccionesAlumno|ImportarAlumnoPorCurso');
         Route::get('/{id}/estado-cuenta', [Academia\AlumnoController::class, 'estadoCuenta'])->name('alumnos.estado-cuenta')->middleware('permission:EstadoCuentaAlumno|CrearMatricula');
         Route::get('/{id}', [Academia\AlumnoController::class, 'show'])->name('alumnos.show')->middleware(Permisos::lectura(['Alumno', 'Curso', 'Pago', 'Paquete', 'ClasePrivada', 'Matricula', 'EnvioCorreo']));
         Route::put('/{id}', [Academia\AlumnoController::class, 'update'])->name('alumnos.update')->middleware('permission:ModificarAlumno');

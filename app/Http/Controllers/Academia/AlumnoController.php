@@ -10,6 +10,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Academia\Sede;
 use App\Support\CorreoUnico;
 use App\Models\Academia\Alumno;
+use App\Services\Academia\ExportacionAlumnos;
+use App\Services\Academia\ImportacionCorrecciones;
+use App\Support\Academias\GestorAcademias;
 use Illuminate\Support\Facades\Validator;
 
 class AlumnoController extends Controller
@@ -88,6 +91,49 @@ class AlumnoController extends Controller
             }
         } catch (Exception $e) {
             DB::rollback();
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /** Excel de validación: alumnos por curso con lo que debe cada uno. GET /v1/alumnos/exportar-por-curso */
+    public function exportarPorCurso()
+    {
+        try {
+            $academia = GestorAcademias::actual();
+            $codigo = $academia->codigo ?? 'academia';
+            $archivo = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'alumnos-' . uniqid('', true) . '.xlsx';
+            (new ExportacionAlumnos())->generar($archivo, 'Alumnos ' . ($academia->nombre ?? ''));
+            return response()->download($archivo, "alumnos-por-curso-{$codigo}-" . date('Y-m-d') . '.xlsx', [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ])->deleteFileAfterSend();
+        } catch (Exception $e) {
+            return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Sube el Excel de alumnos por curso con correcciones (pareja, valor especial, retiros, nuevas matrículas).
+     * POST /v1/alumnos/importar-correcciones { archivo: .xlsx, confirmar: bool }
+     * Sin confirmar solo simula y devuelve los cambios y ajustes de precio (vista previa); no guarda nada.
+     */
+    public function importarCorrecciones(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'archivo' => 'required|file|mimes:xlsx|max:10240',
+            'confirmar' => 'nullable|boolean',
+        ], [
+            'archivo.required' => 'Elija el archivo Excel con las correcciones.',
+            'archivo.mimes' => 'El archivo debe ser un Excel (.xlsx).',
+        ]);
+        if ($validator->fails()) {
+            return response(get_response_body(format_messages_validator($validator)), Response::HTTP_BAD_REQUEST);
+        }
+        try {
+            $confirmar = $request->boolean('confirmar');
+            $resultado = (new ImportacionCorrecciones())->procesar($request->file('archivo')->getRealPath(), $confirmar);
+            $estado = $confirmar && $resultado['errores'] ? Response::HTTP_CONFLICT : Response::HTTP_OK;
+            return response($resultado, $estado);
+        } catch (Exception $e) {
             return response(get_response_body([$e->getMessage()]), Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }

@@ -33,7 +33,7 @@ class AcademiaMenuSeeder extends Seeder
         'Academia' => ['school', 5, [
             // Home del profesor; primera del menú para que sea a donde entra quien solo tiene esto y Tomar asistencia.
             ['Mis cursos', '/mis-cursos', 'co_present', 'MisCursos'],
-            ['Alumnos', '/alumnos', 'groups', 'Alumno', ['EstadoCuenta' => 'Listar', 'Exportar' => 'Listar']],
+            ['Alumnos', '/alumnos', 'groups', 'Alumno', ['EstadoCuenta' => 'Listar', 'Exportar' => 'Listar', 'ImportarCorrecciones']],
             ['Matrícula rápida', '/matriculas', 'how_to_reg', 'Matricula'],
             ['Profesores', '/profesores', 'person', 'Profesor', ['Exportar' => 'Listar']],
             ['Cursos', '/cursos', 'event', 'Curso', ['FormaDePago' => 'Modificar', 'ValorEspecial', 'Exportar' => 'Listar']],
@@ -47,6 +47,8 @@ class AcademiaMenuSeeder extends Seeder
             ['Asistencia', '/asistencias', 'fact_check', 'Asistencia', ['Exportar' => 'Listar']],
             ['Pagos', '/pagos', 'payments', 'Pago', ['Condonar', 'Exportar' => 'Listar']],
             ['Panel Academia', '/dashboard-academia', 'dashboard', 'DashboardAcademia'],
+            // Excel de validación de alumnos por curso y carga de sus correcciones (mismo que los botones de Alumnos).
+            ['Alumnos por curso', '/alumnos-por-curso', 'table_view', 'AlumnoPorCurso', ['Importar']],
         ]],
         // Público aparte: nada de esto se mezcla con alumnos, cursos ni pagos de la academia.
         'Vacacionales' => ['beach_access', 6, [
